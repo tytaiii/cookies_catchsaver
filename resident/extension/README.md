@@ -1,5 +1,7 @@
 # Resident Cookie 助手
 
+[English](README.en.md) · **简体中文**
+
 Chromium 扩展：读取当前网页可发送的 Cookie（包括 HttpOnly），写入你自己的 Resident 服务并立即检测登录态。也可以管理站点、查看状态、编辑凭据或只复制 Cookie。
 
 ## 安装
