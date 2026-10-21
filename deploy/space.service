@@ -1,0 +1,25 @@
+# 用户级 systemd 单元。放到 ~/.config/systemd/user/ 下，然后
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now <名字>
+#
+# 安装前检查 `command -v node`；不是 /usr/bin/node 时，修改 ExecStart。
+#
+[Unit]
+Description=Space - 下载空间（系统盘文件夹的公开下载页）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/space
+ExecStart=/usr/bin/node %h/space/server.js
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+Environment=PORT=8902
+Environment=HOST=127.0.0.1
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

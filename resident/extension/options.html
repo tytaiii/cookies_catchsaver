@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网站常驻 · 管理面板</title>
+<style>
+  :root {
+    --bg: #250301;
+    --card: rgba(255, 255, 255, 0.06);
+    --border: rgba(255, 255, 255, 0.13);
+    --text: #e6f0b0;
+    --muted: rgba(230, 240, 176, 0.62);
+    --dim: rgba(230, 240, 176, 0.40);
+    --accent: #ff0000;
+    --green: #22c55e;
+    --red: #ef4444;
+    --amber: #f59e0b;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text); min-height: 100vh;
+    font: 14px/1.65 -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    padding: 32px 20px 60px;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  .wrap { width: 100%; max-width: 860px; }
+
+  h1 { font-size: 24px; letter-spacing: 1px; font-weight: 700; }
+  .head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  .badge {
+    font-size: 11px; color: var(--dim); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 10px;
+  }
+  .conn { font-size: 12.5px; color: var(--muted); margin-bottom: 20px; }
+  .conn b { color: var(--green); font-weight: 600; }
+  .conn.bad b { color: var(--red); }
+
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 18px; margin-bottom: 14px;
+  }
+
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .toolbar .spacer { flex: 1; }
+
+  button {
+    font: inherit; font-size: 13px; font-weight: 600; color: #fff;
+    background: var(--accent); border: none; border-radius: 9px;
+    padding: 9px 14px; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.12); }
+  button:disabled { opacity: .45; cursor: default; filter: none; }
+  button.ghost {
+    background: rgba(255, 255, 255, .06); color: var(--muted);
+    border: 1px solid var(--border); font-weight: 500;
+  }
+  button.ghost:hover { background: rgba(255, 255, 255, .1); color: var(--text); filter: none; }
+  button.sm { padding: 6px 11px; font-size: 12px; border-radius: 8px; }
+  button.danger { background: transparent; border: 1px solid rgba(239, 68, 68, .45); color: #fca5a5; }
+  button.danger:hover { background: rgba(239, 68, 68, .12); filter: none; }
+
+  .site {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 16px; margin-bottom: 12px;
+  }
+  .site.bad { border-color: rgba(239, 68, 68, .35); }
+  .site.warn { border-color: rgba(245, 158, 11, .35); }
+
+  .site-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: 0 0 auto; }
+  .dot.ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.bad { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  .dot.warn { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+  .site-name { font-size: 15px; font-weight: 600; }
+  .tag {
+    font-size: 11px; border-radius: 999px; padding: 2px 9px;
+    border: 1px solid var(--border); color: var(--dim);
+  }
+  .tag.ok { color: var(--green); border-color: rgba(34, 197, 94, .35); background: rgba(34, 197, 94, .1); }
+  .tag.bad { color: var(--red); border-color: rgba(239, 68, 68, .35); background: rgba(239, 68, 68, .1); }
+  .tag.warn { color: var(--amber); border-color: rgba(245, 158, 11, .35); background: rgba(245, 158, 11, .1); }
+  .site-meta { margin-left: auto; font-size: 11.5px; color: var(--dim); }
+  .site-url {
+    margin-top: 8px; font-size: 12.5px; color: var(--accent);
+    font-family: "SF Mono", "Consolas", monospace; word-break: break-all;
+  }
+  .site-reason { margin-top: 6px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+  .site-reason.err { color: #fca5a5; }
+  .site-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+
+  .field { margin-bottom: 14px; }
+  label { display: block; font-size: 11.5px; color: var(--dim); margin: 0 0 5px 2px; }
+  input, textarea {
+    width: 100%; font: inherit; font-size: 13px; color: var(--text);
+    background: rgba(0, 0, 0, .3); border: 1px solid var(--border);
+    border-radius: 9px; padding: 9px 11px; outline: none;
+  }
+  textarea { font-family: "SF Mono", "Consolas", monospace; font-size: 12px; line-height: 1.6; resize: vertical; }
+  input:focus, textarea:focus { border-color: rgba(255, 0, 0, .5); }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .hint { font-size: 11.5px; color: var(--dim); margin-top: 5px; line-height: 1.6; }
+
+  .msg { font-size: 12.5px; line-height: 1.6; margin-top: 10px; word-break: break-all; }
+  .msg.ok { color: var(--green); }
+  .msg.err { color: #fca5a5; }
+
+  pre {
+    margin-top: 10px; padding: 12px; max-height: 260px; overflow: auto;
+    background: rgba(0, 0, 0, .35); border: 1px solid var(--border); border-radius: 9px;
+    font-family: "SF Mono", "Consolas", monospace; font-size: 11.5px; line-height: 1.5;
+    color: var(--muted); white-space: pre-wrap; word-break: break-all;
+  }
+  .empty { padding: 30px 16px; text-align: center; color: var(--dim); font-size: 13px;
+           border: 1px dashed var(--border); border-radius: 12px; }
+  footer { margin-top: 26px; text-align: center; font-size: 11.5px; color: var(--dim); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <h1>网站常驻</h1>
+    <span class="badge" id="ver">管理面板</span>
+  </div>
+  <div class="conn" id="conn">正在连接 <b>…</b></div>
+
+  <div class="toolbar">
+    <button id="new-btn">＋ 新建常驻站</button>
+    <div class="spacer"></div>
+    <button class="ghost sm" id="reload-btn">刷新</button>
+    <button class="ghost sm" id="settings-btn">连接设置</button>
+  </div>
+
+  <div id="list"></div>
+
+  <!-- 连接设置 -->
+  <section class="card" id="settings" hidden>
+    <div class="field">
+      <label>服务地址</label>
+      <input id="s-base" placeholder="https://your-domain.example/resident">
+    </div>
+    <div class="field">
+      <label>授权码（访问令牌）</label>
+      <input id="s-token" type="password" placeholder="留空可点下面的自动获取">
+    </div>
+    <div class="toolbar" style="margin-bottom:0">
+      <button id="s-save" class="sm">保存</button>
+      <button id="s-auto" class="ghost sm">从已登录页面自动获取</button>
+    </div>
+    <div class="hint">先填写你自己的 HTTPS 服务地址。授权码只存在这台浏览器本地。</div>
+  </section>
+
+  <!-- 新建 / 编辑 -->
+  <section class="card" id="form" hidden>
+    <div style="font-size:14px;font-weight:600;margin-bottom:14px" id="form-title">新建常驻站</div>
+
+    <div class="row2">
+      <div class="field">
+        <label>名称</label>
+        <input id="f-name" placeholder="例如：格大 Moodle">
+      </div>
+      <div class="field">
+        <label>检测间隔（分钟，最少 5）</label>
+        <input id="f-interval" type="number" min="5" max="1440" value="30">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>网址（登录后能打开的页面）</label>
+      <input id="f-url" placeholder="https://example.com/files">
+    </div>
+
+    <div class="field">
+      <label>Cookie</label>
+      <textarea id="f-cookie" rows="4" placeholder="MoodleSession=xxxx; MOODLEID1_=yyyy"></textarea>
+      <div class="hint">支持请求头、Cookie 插件导出的表格、cookies.txt 三种格式。已有站点留空表示不修改。</div>
+    </div>
+
+    <div class="field">
+      <label>额外请求头（一行一个，可选）</label>
+      <textarea id="f-headers" rows="3" placeholder="Authorization: Bearer ghp_xxxxxxxx"></textarea>
+    </div>
+
+    <div class="row2">
+      <div class="field">
+        <label>登录特征串（可选，建议填）</label>
+        <input id="f-expect" placeholder="登录后页面上稳定出现的文字">
+      </div>
+      <div class="field">
+        <label>User-Agent（可选）</label>
+        <input id="f-ua" placeholder="留空用默认 Chrome UA">
+      </div>
+    </div>
+
+    <div class="msg" id="form-msg"></div>
+
+    <div class="toolbar" style="margin:14px 0 0">
+      <button id="f-save" class="sm">保存并检测</button>
+      <button id="f-cancel" class="ghost sm">取消</button>
+    </div>
+  </section>
+
+  <footer>扩展版本 1.1 · 数据保存在你的服务器上</footer>
+</div>
+<script src="options.js"></script>
+</body>
+</html>

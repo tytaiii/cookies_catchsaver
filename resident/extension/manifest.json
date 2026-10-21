@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "常驻站 Cookie 助手",
+  "version": "1.2.0",
+  "description": "把当前网站的登录 Cookie 一键写入你自己的「网站常驻」服务，包括 HttpOnly Cookie。",
+  "permissions": [
+    "cookies",
+    "activeTab",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Cookie 助手"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
+}

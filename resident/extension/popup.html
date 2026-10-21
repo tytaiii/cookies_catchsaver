@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Cookie 助手</title>
+<style>
+  :root {
+    --bg: #250301;
+    --card: rgba(255, 255, 255, 0.06);
+    --border: rgba(255, 255, 255, 0.14);
+    --text: #e6f0b0;
+    --muted: rgba(230, 240, 176, 0.62);
+    --dim: rgba(230, 240, 176, 0.42);
+    --accent: #ff0000;
+    --green: #22c55e;
+    --red: #ef4444;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 340px;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.55 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    padding: 12px;
+  }
+  h1 { font-size: 14px; letter-spacing: 1px; display: flex; align-items: center; gap: 8px; }
+  h1 span.badge {
+    font-size: 10px; font-weight: 400; color: var(--dim);
+    border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px;
+  }
+  .site {
+    margin-top: 8px; padding: 8px 10px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 9px;
+    font-size: 12px; color: var(--muted); word-break: break-all;
+  }
+  .site b { color: var(--text); }
+
+  .field { margin-top: 10px; }
+  label { font-size: 11px; color: var(--dim); display: block; margin-bottom: 4px; }
+  input, select {
+    width: 100%; padding: 7px 9px; font: inherit; font-size: 12px;
+    color: var(--text); background: rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--border); border-radius: 8px; outline: none;
+  }
+  input:focus, select:focus { border-color: rgba(255, 0, 0, .5); }
+  select option { background: #2a0503; }
+
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  button {
+    flex: 1; padding: 9px 10px; font: inherit; font-size: 12.5px; font-weight: 600;
+    color: #fff; background: var(--accent); border: none; border-radius: 9px; cursor: pointer;
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ghost {
+    background: rgba(255, 255, 255, .06); color: var(--muted);
+    border: 1px solid var(--border); font-weight: 500;
+  }
+  button.ghost:hover { background: rgba(255, 255, 255, .1); }
+  /* 主行动按钮：正红 + 轻微外发光，作为页面里唯一的高饱和大块 */
+  button.cta {
+    background: var(--accent);
+    color: #fff;
+    font-size: 13.5px;
+    padding: 11px 10px;
+    letter-spacing: .5px;
+    box-shadow: 0 0 0 1px rgba(255, 0, 0, .45), 0 6px 18px rgba(255, 0, 0, .22);
+  }
+  button.cta:hover { filter: brightness(1.12); }
+  button.cta:disabled { box-shadow: none; }
+
+  #msg { margin-top: 10px; font-size: 12px; line-height: 1.6; color: var(--dim); min-height: 16px; word-break: break-all; }
+  #msg.ok { color: var(--green); }
+  #msg.err { color: #fca5a5; }
+  details { margin-top: 10px; }
+  summary { font-size: 11px; color: var(--dim); cursor: pointer; outline: none; }
+  .hint { font-size: 10.5px; color: var(--dim); margin-top: 4px; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <h1>🍪 Cookie 助手 <span class="badge" id="ver">v1.2</span></h1>
+
+  <div class="site">当前页面：<b id="cur">读取中…</b></div>
+
+  <div class="row">
+    <button id="auto">自动连接</button>
+  </div>
+  <div class="hint" id="auto-hint">先在高级设置填写你的服务地址；登录该服务页面后可自动连接。</div>
+
+  <details id="settings">
+    <summary>服务设置（首次使用必填）</summary>
+    <div class="field">
+      <label>服务地址</label>
+      <input id="base" placeholder="https://your-domain.example/resident">
+    </div>
+    <div class="field">
+      <label>授权码（访问令牌）</label>
+      <input id="token" type="password" placeholder="一般留空，用上面的「自动连接」">
+    </div>
+    <div class="row">
+      <button class="ghost" id="save">保存设置</button>
+    </div>
+    <div class="hint">授权码只存在这台浏览器本地（chrome.storage），不会发送到除上面地址以外的任何地方。</div>
+  </details>
+
+  <div class="field">
+    <label>写入哪个常驻站 <a href="#" id="reload" style="float:right;color:#ff0000;text-decoration:none;font-size:11px">↻ 刷新列表</a></label>
+    <select id="target"><option value="">— 还没加载，先填设置并保存 —</option></select>
+    <div class="hint" id="sites-state"></div>
+  </div>
+
+  <div class="row">
+    <button class="ghost" id="write">写入并检测</button>
+    <button class="ghost" id="copy">只复制</button>
+  </div>
+
+  <div class="row">
+    <button class="cta" id="create">＋ 为当前网站新建常驻站</button>
+  </div>
+
+  <div class="row">
+    <button class="ghost" id="manage">打开管理面板（查看状态 / 编辑）</button>
+  </div>
+
+  <div id="msg"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

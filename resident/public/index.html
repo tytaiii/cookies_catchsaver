@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网站常驻</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    /* 底色：rgb(0.147, 0.010, 0.005) → #250301 */
+    --bg: #250301;
+    --card: rgba(255, 255, 255, 0.06);
+    --card-border: rgba(255, 255, 255, 0.12);
+    /* 字色：rgb(0.901, 0.941, 0.690) → #e6f0b0 */
+    --text: #e6f0b0; --muted: rgba(230, 240, 176, 0.62); --dim: rgba(230, 240, 176, 0.40);
+    --accent: #ff0000; --green: #22c55e; --red: #ef4444; --amber: #f59e0b;
+  }
+
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    min-height: 100vh;
+    background: var(--bg);
+    background-attachment: fixed;
+    color: var(--text);
+    padding: 32px 20px 60px;
+    display: flex; flex-direction: column; align-items: center;
+  }
+
+  .wrap { width: 100%; max-width: 820px; }
+
+  .back { font-size: 13px; color: var(--accent); text-decoration: none; }
+  .back:hover { text-decoration: underline; }
+
+  header { margin: 18px 0 24px; }
+  .head-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .logo { font-size: 34px; }
+  h1 { font-size: 26px; font-weight: 700; letter-spacing: 1px; }
+  .sub { margin-top: 10px; font-size: 14px; color: var(--muted); line-height: 1.8; }
+
+  .card {
+    background: var(--card);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+  }
+
+  .card-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+
+  .btn {
+    font-size: 14px; font-weight: 600; color: #fff;
+    background: var(--accent);
+    border: none; border-radius: 10px;
+    padding: 10px 16px; cursor: pointer;
+    transition: filter .2s;
+  }
+  .btn:hover { filter: brightness(1.1); }
+  .btn:disabled { opacity: .5; cursor: default; filter: none; }
+  .btn.sm { font-size: 12.5px; padding: 7px 12px; border-radius: 8px; }
+  .ghost {
+    font-size: 12.5px; color: var(--dim);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 8px; padding: 7px 12px; cursor: pointer;
+  }
+  .ghost:hover { background: rgba(255, 255, 255, 0.1); color: var(--muted); }
+  .danger { color: var(--red); border-color: rgba(239, 68, 68, .35); }
+  .danger:hover { background: rgba(239, 68, 68, .12); color: #fca5a5; }
+
+  input, textarea {
+    width: 100%;
+    font-family: inherit;
+    font-size: 13.5px;
+    color: var(--text);
+    background: rgba(0, 0, 0, 0.28);
+    border: 1px solid var(--card-border);
+    border-radius: 9px;
+    padding: 10px 12px;
+    outline: none;
+  }
+  input:focus, textarea:focus { border-color: rgba(255, 0, 0, .6); }
+  textarea { resize: vertical; line-height: 1.6; font-family: "SF Mono", "Consolas", monospace; font-size: 12.5px; }
+  label { display: block; font-size: 12px; color: var(--dim); margin: 0 0 6px 2px; }
+  .field { margin-bottom: 14px; }
+  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .hint { font-size: 11.5px; color: var(--dim); margin-top: 6px; line-height: 1.6; }
+  .oauth-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .oauth-state { font-size: 12px; color: var(--dim); line-height: 1.7; }
+  .oauth-state a { color: var(--accent); text-decoration: none; }
+  .oauth-state a:hover { text-decoration: underline; }
+  .oauth-state b { color: var(--text); letter-spacing: 1.5px; font-size: 13px; }
+
+  /* 列表 */
+  .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .toolbar .spacer { flex: 1; }
+  .summary { font-size: 12px; color: var(--dim); }
+
+  .site {
+    background: var(--card);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    transition: border-color .2s;
+  }
+  .site.bad { border-color: rgba(239, 68, 68, .35); }
+  .site.warn { border-color: rgba(245, 158, 11, .35); }
+
+  .site-head { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex-shrink: 0; }
+  .dot.ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.bad { background: var(--red); box-shadow: 0 0 8px var(--red); }
+  .dot.warn { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+  .dot.idle { background: var(--dim); }
+
+  .site-name { font-size: 15px; font-weight: 600; }
+  .tag {
+    font-size: 11px; border-radius: 999px; padding: 3px 10px;
+    border: 1px solid var(--card-border); color: var(--dim);
+  }
+  .tag.ok { color: var(--green); border-color: rgba(34, 197, 94, .35); background: rgba(34, 197, 94, .1); }
+  .tag.bad { color: var(--red); border-color: rgba(239, 68, 68, .35); background: rgba(239, 68, 68, .1); }
+  .tag.warn { color: var(--amber); border-color: rgba(245, 158, 11, .35); background: rgba(245, 158, 11, .1); }
+
+  .site-meta { margin-left: auto; font-size: 11.5px; color: var(--dim); }
+  .site-url {
+    margin-top: 8px; font-size: 12.5px; color: var(--accent);
+    font-family: "SF Mono", "Consolas", monospace;
+    word-break: break-all;
+  }
+  .site-reason { margin-top: 6px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+  .site-reason .err { color: #fca5a5; }
+  .site-title { margin-top: 4px; font-size: 11.5px; color: var(--dim); }
+
+  .site-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--card-border); }
+
+  .empty {
+    border: 1px dashed var(--card-border);
+    border-radius: 12px;
+    padding: 26px 16px; text-align: center;
+    font-size: 13px; color: var(--dim); line-height: 1.8;
+  }
+
+  .error-box {
+    font-size: 12.5px; color: #fca5a5;
+    background: rgba(239, 68, 68, .1);
+    border: 1px solid rgba(239, 68, 68, .3);
+    border-radius: 9px; padding: 9px 12px; margin-top: 10px;
+    line-height: 1.6;
+  }
+  .error-box[hidden] { display: none; }
+
+  /* 取文件结果 */
+  .drawer { margin-top: 12px; border-top: 1px solid var(--card-border); padding-top: 12px; }
+  .drawer pre {
+    max-height: 320px; overflow: auto;
+    background: rgba(0, 0, 0, .35);
+    border: 1px solid var(--card-border);
+    border-radius: 9px;
+    padding: 12px;
+    font-family: "SF Mono", "Consolas", monospace;
+    font-size: 12px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-all;
+    color: var(--muted);
+  }
+  .kv { font-size: 12px; color: var(--dim); margin-bottom: 8px; line-height: 1.7; }
+  .kv b { color: var(--muted); font-weight: 600; }
+
+  .howto { font-size: 12.5px; color: var(--muted); line-height: 1.9; }
+  .howto code, .site-reason code {
+    font-family: "SF Mono", "Consolas", monospace;
+    font-size: 12px; color: var(--accent);
+    background: rgba(255, 0, 0, .12);
+    border-radius: 5px; padding: 1px 5px;
+  }
+  .howto .sec { margin-top: 10px; }
+  .howto .sec:first-child { margin-top: 0; }
+
+  footer { margin-top: 26px; text-align: center; font-size: 12px; color: var(--dim); line-height: 1.8; }
+  footer a { color: var(--accent); text-decoration: none; }
+
+  @media (max-width: 560px) {
+    .field-row { grid-template-columns: 1fr; }
+    .site-meta { margin-left: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/">← 返回首页</a>
+
+  <header>
+    <div class="head-row">
+      <span class="logo">📌</span>
+      <h1>网站常驻</h1>
+    </div>
+    <div class="sub">
+      填网址 + 登录 cookie，服务器替你保持登录态；定时探测是否失效，失效的在这里标红。
+      之后可以让 AI 带着这份 cookie 取文件、代你在站点上操作。
+    </div>
+  </header>
+
+  <!-- 令牌门禁 -->
+  <section id="gate" class="card" hidden>
+    <div class="card-title">需要访问令牌</div>
+    <div class="field">
+      <label>Token</label>
+      <input id="token-input" type="password" placeholder="粘贴 token" autocomplete="off">
+      <div class="hint">在服务器上执行 <code>cat ~/resident/data/token.txt</code> 取得；只保存在本机浏览器。</div>
+    </div>
+    <button class="btn" id="gate-btn">进入</button>
+    <div class="error-box" id="gate-error" hidden></div>
+  </section>
+
+  <!-- 主界面 -->
+  <div id="app" hidden>
+    <div class="toolbar">
+      <button class="btn" id="add-btn">+ 添加常驻站</button>
+      <div class="spacer"></div>
+      <span class="summary" id="summary"></span>
+      <button class="ghost" id="refresh-btn">刷新</button>
+      <button class="ghost" id="logout-btn">退出令牌</button>
+    </div>
+
+    <div id="list"></div>
+
+    <!-- 添加 / 编辑表单 -->
+    <section id="form-card" class="card" hidden>
+      <div class="card-title" id="form-title">添加常驻站</div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>名称</label>
+          <input id="f-name" placeholder="例如：某云盘">
+        </div>
+        <div class="field">
+          <label>检测间隔（分钟）</label>
+          <input id="f-interval" type="number" min="5" max="1440" value="30">
+        </div>
+      </div>
+
+      <div class="field">
+        <label>网址（登录后能打开的那个页面）</label>
+        <input id="f-url" placeholder="https://example.com/files">
+      </div>
+
+      <div class="field">
+        <label>Cookie（从浏览器开发者工具里整串复制）</label>
+        <textarea id="f-cookie" rows="4" placeholder="MoodleSession=xxxx; MOODLEID1_=yyyy&#10;—— 或者直接粘贴 Cookie 插件导出的表格（Tab 分隔），会自动挑出本站的 cookie"></textarea>
+        <div class="hint">支持三种粘贴：<b>Cookie 请求头</b>、<b>插件导出的表格</b>（名称/值/域/路径/过期…）、<b>cookies.txt</b>。
+          只贴「值」不行，必须有名字。表格里的域要和网址对得上，已过期的会自动跳过。</div>
+        <div class="hint">加密存放在服务器本地。<span id="cookie-state"></span></div>
+      </div>
+
+      <div class="field">
+        <label>额外请求头（可选，一行一个）</label>
+        <textarea id="f-headers" rows="3" placeholder="Authorization: Bearer ghp_xxxxxxxxxxxx"></textarea>
+        <div class="hint">适合用 Token 认证的站点（如 GitHub）。会和 cookie 一样加密保存。
+          <code>Host</code> / <code>Content-Length</code> 这类不允许改的会被忽略。</div>
+        <div class="oauth-row">
+          <button class="ghost" id="gh-login-btn" type="button">用 GitHub 登录获取 Token</button>
+          <span class="oauth-state" id="gh-login-state"></span>
+        </div>
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label>登录特征串（可选，强烈建议）</label>
+          <input id="f-expect" placeholder="例如：我的文件">
+          <div class="hint">登录后页面上稳定出现的文字。填了它，判断「是否还登录着」最准。</div>
+        </div>
+        <div class="field">
+          <label>User-Agent（可选）</label>
+          <input id="f-ua" placeholder="留空用默认 Chrome UA">
+        </div>
+      </div>
+
+      <div class="error-box" id="form-error" hidden></div>
+
+      <div style="display:flex;gap:10px;margin-top:14px">
+        <button class="btn" id="form-save">保存并检测</button>
+        <button class="ghost" id="form-cancel">取消</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-title">怎么用</div>
+      <div class="howto">
+        <div class="sec"><b>1. 拿 cookie</b>：浏览器登录目标站 → F12 → Network → 任意请求 → Request Headers → 复制 <code>Cookie</code> 整行（不含 <code>Cookie:</code> 前缀也行）。</div>
+        <div class="sec"><b>2. 填「登录特征串」</b>：登录后页面上一定会出现的几个字。带 cookie 请求这个页面却找不到它，基本就是掉登录了。</div>
+        <div class="sec"><b>3. 服务器每 30 分钟</b>带 cookie 访问一次：既是探测，也顺带续期会话。改完直接看卡片上的圆点。</div>
+        <div class="sec"><b>4. AI 取文件</b>：
+          <br><code>curl -s -H "X-Token: $TOKEN" "http://127.0.0.1:8901/api/sites/&lt;id&gt;/fetch?path=/api/list"</code>
+          <br>返回 JSON（文本页面给 <code>text</code>，二进制给 <code>bodyBase64</code>）。需要 POST 时用 <code>-X POST -d '{"path":"/upload","method":"POST","body":"..."}'</code>。</div>
+      </div>
+    </section>
+  </div>
+
+  <footer>
+    Resident · 网站登录态管理
+  </footer>
+</div>
+
+<script>
+  const TOKEN_KEY = 'resident.token';
+  const STATUS = {
+    valid:       { text: '有效',     cls: 'ok'   },
+    expired:     { text: '登录失效', cls: 'bad'  },
+    invalid:     { text: '网址失效', cls: 'bad'  },
+    unreachable: { text: '打不开',   cls: 'warn' },
+    unknown:     { text: '未检测',   cls: 'idle' },
+    checking:    { text: '检测中',   cls: 'idle' },
+  };
+
+  let token = localStorage.getItem(TOKEN_KEY) || '';
+  let sites = [];
+  let editingId = null;
+  let openDrawer = null;
+
+  // 页面既可能挂在 /resident/（nginx 反代），也可能直连 127.0.0.1:8901/，
+  // 所以接口地址按当前目录前缀拼，不写死。
+  const BASE = location.pathname.endsWith('/')
+    ? location.pathname
+    : location.pathname.replace(/[^/]*$/, '');
+
+  const $ = (id) => document.getElementById(id);
+
+  // 支持用 URL 片段直接带 token（# 不会发给服务器），方便手机/新设备首次进入
+  (function absorbHashToken() {
+    const m = location.hash.match(/token=([A-Za-z0-9_-]+)/);
+    if (!m) return;
+    token = m[1];
+    localStorage.setItem(TOKEN_KEY, token);
+    history.replaceState(null, '', location.pathname);
+  })();
+
+  async function api(path, opts = {}) {
+    const headers = Object.assign({}, opts.headers || {});
+    headers['X-Token'] = token;
+    if (opts.body && !headers['content-type']) headers['content-type'] = 'application/json';
+    const r = await fetch(BASE + path, Object.assign({}, opts, { headers }));
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 401) {
+      showGate('令牌不对，请在服务器上重新取一次：cat ~/resident/data/token.txt');
+      throw new Error('未授权');
+    }
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    return data;
+  }
+
+  function showGate(msg) {
+    $('gate').hidden = false;
+    $('app').hidden = true;
+    if (msg) { $('gate-error').textContent = msg; $('gate-error').hidden = false; }
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  }
+
+  function relTime(iso) {
+    if (!iso) return '未检测';
+    const t = Date.parse(iso);
+    if (Number.isNaN(t)) return '未检测';
+    const d = Math.max(0, Date.now() - t);
+    if (d < 60e3) return '刚刚';
+    if (d < 36e5) return Math.round(d / 60e3) + ' 分钟前';
+    if (d < 864e5) return Math.round(d / 36e5) + ' 小时前';
+    return Math.round(d / 864e5) + ' 天前';
+  }
+
+  function statusOf(site) {
+    const st = (site.last && site.last.status) || 'unknown';
+    return STATUS[st] || STATUS.unknown;
+  }
+
+  function cardHtml(site) {
+    const st = statusOf(site);
+    const last = site.last || {};
+    const cls = st.cls === 'bad' ? 'bad' : (st.cls === 'warn' ? 'warn' : '');
+    const reason = last.reason
+      ? `<div class="site-reason ${st.cls === 'bad' ? 'err' : ''}">${esc(last.reason)}${
+          last.httpStatus ? ` <span style="color:var(--dim)">· HTTP ${last.httpStatus} · ${last.ms || 0}ms</span>` : ''
+        }</div>`
+      : '';
+    const title = last.title ? `<div class="site-title">页面标题：${esc(last.title)}</div>` : '';
+    const drawer = openDrawer && openDrawer.id === site.id ? drawerHtml(openDrawer) : '';
+
+    return `
+      <div class="site ${cls}" data-id="${esc(site.id)}">
+        <div class="site-head">
+          <span class="dot ${st.cls}"></span>
+          <span class="site-name">${esc(site.name)}</span>
+          <span class="tag ${st.cls}">${st.text}</span>
+          <span class="site-meta">${esc(relTime(last.at))}检测 · 每 ${site.intervalMin} 分钟${site.enabled ? '' : ' · 已暂停'}</span>
+        </div>
+        <div class="site-url">${esc(site.url)}</div>
+        ${reason}
+        ${title}
+        <div class="site-actions">
+          <button class="ghost sm" data-act="check" data-id="${esc(site.id)}">立即检测</button>
+          <button class="ghost sm" data-act="edit" data-id="${esc(site.id)}">编辑</button>
+          <button class="ghost sm" data-act="fetch" data-id="${esc(site.id)}">取文件</button>
+          <button class="ghost sm" data-act="toggle" data-id="${esc(site.id)}">${site.enabled ? '暂停' : '恢复'}</button>
+          <button class="ghost sm danger" data-act="del" data-id="${esc(site.id)}">删除</button>
+        </div>
+        ${drawer}
+      </div>`;
+  }
+
+  function drawerHtml(d) {
+    if (d.loading) return `<div class="drawer"><div class="kv">正在抓取…</div></div>`;
+    if (d.error) return `<div class="drawer"><div class="error-box">${esc(d.error)}</div></div>`;
+    const r = d.result || {};
+    const body = r.text != null
+      ? `<pre>${esc(r.text.slice(0, 20000))}${r.text.length > 20000 ? '\n…（已截断显示）' : ''}</pre>`
+      : `<div class="kv">二进制内容 ${r.size} 字节，已省略预览。</div>`;
+    return `
+      <div class="drawer">
+        <div class="kv">
+          <b>${esc(r.requested)}</b> → HTTP ${r.status} · ${esc(r.contentType || '未知类型')} · ${r.size} 字节${r.truncated ? '（截断）' : ''}
+        </div>
+        ${body}
+      </div>`;
+  }
+
+  function render() {
+    const list = $('list');
+    if (!sites.length) {
+      list.innerHTML = `<div class="empty">还没有常驻站<br><span style="font-size:12px">点上面的「添加常驻站」开始</span></div>`;
+    } else {
+      list.innerHTML = sites.map(cardHtml).join('');
+    }
+    const ok = sites.filter((s) => (s.last || {}).status === 'valid').length;
+    const bad = sites.filter((s) => ['expired', 'invalid'].includes((s.last || {}).status)).length;
+    $('summary').textContent = sites.length
+      ? `${sites.length} 个 · 有效 ${ok}${bad ? ` · 失效 ${bad}` : ''}`
+      : '';
+  }
+
+  async function load() {
+    try {
+      const data = await api('api/sites');
+      sites = data.sites || [];
+      render();
+    } catch (e) {
+      if (e.message !== '未授权') console.warn(e);
+    }
+  }
+
+  function resetForm() {
+    editingId = null;
+    $('form-title').textContent = '添加常驻站';
+    $('f-name').value = '';
+    $('f-url').value = '';
+    $('f-cookie').value = '';
+    $('f-expect').value = '';
+    $('f-ua').value = '';
+    $('f-headers').value = '';
+    $('f-interval').value = '30';
+    $('cookie-state').textContent = '';
+    $('form-error').hidden = true;
+  }
+
+  function openForm(site) {
+    resetForm();
+    if (site) {
+      editingId = site.id;
+      $('form-title').textContent = '编辑：' + site.name;
+      $('f-name').value = site.name || '';
+      $('f-url').value = site.url || '';
+      $('f-expect').value = site.expect || '';
+      $('f-interval').value = site.intervalMin || 30;
+      $('cookie-state').textContent = '留空则不修改现有 cookie。';
+      api(`api/sites/${encodeURIComponent(site.id)}?reveal=1`).then((d) => {
+        $('f-cookie').value = d.site.cookie || '';
+        $('f-ua').value = d.site.ua || '';
+        $('f-headers').value = d.site.headers || '';
+      }).catch(() => {});
+    }
+    $('form-card').hidden = false;
+    $('form-card').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    $('f-url').focus();
+  }
+
+  async function saveForm() {
+    const payload = {
+      name: $('f-name').value.trim(),
+      url: $('f-url').value.trim(),
+      cookie: $('f-cookie').value.trim(),
+      expect: $('f-expect').value.trim(),
+      ua: $('f-ua').value.trim(),
+      headers: $('f-headers').value.trim(),
+      intervalMin: Number($('f-interval').value) || 30,
+    };
+    if (!payload.url) return formError('网址不能为空');
+    if (!editingId && !payload.cookie && !payload.headers) {
+      return formError('需要填入 Cookie，或至少一个额外请求头（如 Authorization: Bearer xxx）');
+    }
+
+    const btn = $('form-save');
+    btn.disabled = true;
+    btn.textContent = '保存中…';
+    try {
+      if (editingId) {
+        if (!payload.cookie) delete payload.cookie;
+        if (!payload.headers) delete payload.headers;
+        await api(`api/sites/${encodeURIComponent(editingId)}`, {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await api('api/sites', { method: 'POST', body: JSON.stringify(payload) });
+      }
+      $('form-card').hidden = true;
+      resetForm();
+      await load();
+    } catch (e) {
+      formError(e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '保存并检测';
+    }
+  }
+
+  function formError(msg) {
+    $('form-error').textContent = msg;
+    $('form-error').hidden = false;
+  }
+
+  async function doAction(act, id) {
+    const site = sites.find((s) => s.id === id);
+    if (!site) return;
+
+    if (act === 'edit') return openForm(site);
+
+    if (act === 'del') {
+      if (!confirm(`确定删除「${site.name}」？cookie 会一起删掉。`)) return;
+      await api(`api/sites/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      return load();
+    }
+
+    if (act === 'toggle') {
+      await api(`api/sites/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled: !site.enabled }),
+      });
+      return load();
+    }
+
+    if (act === 'check') {
+      site.last = { status: 'checking' };
+      render();
+      try {
+        await api(`api/sites/${encodeURIComponent(id)}/check`, { method: 'POST' });
+      } catch (e) {
+        alert('检测失败：' + e.message);
+      }
+      return load();
+    }
+
+    if (act === 'fetch') {
+      const p = prompt('要抓取该站点的哪个路径？（相对该站域名）', '/');
+      if (p === null) return;
+      openDrawer = { id, loading: true };
+      render();
+      try {
+        const r = await api(`api/sites/${encodeURIComponent(id)}/fetch`, {
+          method: 'POST',
+          body: JSON.stringify({ path: p || '/', method: 'GET' }),
+        });
+        openDrawer = { id, result: r };
+      } catch (e) {
+        openDrawer = { id, error: e.message };
+      }
+      return render();
+    }
+  }
+
+  // ---------- GitHub 设备码登录 ----------
+  let ghTimer = null;
+
+  async function ghEnsureClientId() {
+    const d = await api('api/oauth/config');
+    if (d.clientId) return d.clientId;
+    const v = prompt(
+      'GitHub OAuth App 的 Client ID\n'
+      + '（GitHub → Settings → Developer settings → OAuth Apps → 你的应用，复制 Client ID）'
+    ) || '';
+    const t = v.trim();
+    if (!t) throw new Error('没有 client ID 就没法发起登录');
+    await api('api/oauth/config', { method: 'POST', body: JSON.stringify({ clientId: t }) });
+    return t;
+  }
+
+  async function ghLogin() {
+    const btn = $('gh-login-btn');
+    const st = $('gh-login-state');
+    btn.disabled = true;
+    st.textContent = '正在向 GitHub 申请设备码…';
+    try {
+      await ghEnsureClientId();
+      const d = await api('api/oauth/start', { method: 'POST', body: '{}' });
+      st.innerHTML = '在 <a href="' + d.verificationUri + '" target="_blank" rel="noopener">github.com/login/device</a> '
+        + '输入 <b>' + d.userCode + '</b>（' + Math.round(d.expiresIn / 60) + ' 分钟内有效），完成后这里会自动填好';
+      ghPoll(d.id, d.interval || 5);
+    } catch (e) {
+      st.textContent = '失败：' + e.message;
+      btn.disabled = false;
+    }
+  }
+
+  function ghPoll(id, interval) {
+    clearTimeout(ghTimer);
+    ghTimer = setTimeout(async () => {
+      try {
+        const d = await api('api/oauth/poll?id=' + encodeURIComponent(id));
+        if (d.status === 'ok') {
+          $('f-headers').value = 'Authorization: Bearer ' + d.token;
+          $('gh-login-state').innerHTML = '✅ 已拿到 token 并填入上面的输入框，点「保存并检测」即可';
+          $('gh-login-btn').disabled = false;
+          return;
+        }
+        if (d.status === 'error') {
+          $('gh-login-state').textContent = '失败：' + (d.message || d.error || '未知错误');
+          $('gh-login-btn').disabled = false;
+          return;
+        }
+        ghPoll(id, d.interval || interval);
+      } catch (e) {
+        $('gh-login-state').textContent = '轮询失败：' + e.message;
+        $('gh-login-btn').disabled = false;
+      }
+    }, (interval || 5) * 1000);
+  }
+
+  // ---------- 事件绑定 ----------
+  $('list').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    doAction(btn.dataset.act, btn.dataset.id).catch((err) => alert(err.message));
+  });
+
+  $('gate-btn').addEventListener('click', async () => {
+    const v = $('token-input').value.trim();
+    if (!v) return;
+    token = v;
+    localStorage.setItem(TOKEN_KEY, v);
+    try {
+      const data = await api('api/sites');
+      sites = data.sites || [];
+      $('gate').hidden = true;
+      $('app').hidden = false;
+      render();
+    } catch (e) {
+      localStorage.removeItem(TOKEN_KEY);
+      token = '';
+      showGate('令牌不对，请在服务器上重新取一次：cat ~/resident/data/token.txt');
+    }
+  });
+
+  $('token-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') $('gate-btn').click();
+  });
+
+  $('add-btn').addEventListener('click', () => openForm(null));
+  $('form-cancel').addEventListener('click', () => { $('form-card').hidden = true; resetForm(); });
+  $('form-save').addEventListener('click', saveForm);
+  $('gh-login-btn').addEventListener('click', ghLogin);
+  $('refresh-btn').addEventListener('click', () => load());
+  $('logout-btn').addEventListener('click', () => {
+    localStorage.removeItem(TOKEN_KEY);
+    token = '';
+    showGate('');
+    $('token-input').value = '';
+  });
+
+  // 启动：有 token 就直接进，没有就显示门禁
+  (async function boot() {
+    if (!token) return showGate('');
+    try {
+      const data = await api('api/sites');
+      sites = data.sites || [];
+      $('gate').hidden = true;
+      $('app').hidden = false;
+      render();
+    } catch (e) {
+      if (e.message === '未授权') { $('token-input').value = token; token = ''; }
+      else { $('gate').hidden = true; $('app').hidden = false; render(); }
+    }
+  })();
+
+  setInterval(() => {
+    if (!$('app').hidden && !document.hidden) load();
+  }, 20000);
+</script>
+</body>
+</html>

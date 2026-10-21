@@ -1,0 +1,28 @@
+# 用户级 systemd 单元。放到 ~/.config/systemd/user/ 下，然后
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now <名字>
+#
+# 安装前检查 `command -v node`；不是 /usr/bin/node 时，修改 ExecStart。
+#
+# 只想跑接口、不要网页前端时，加一行：
+#   Environment=SERVE_WEB=0
+#
+[Unit]
+Description=Resident - 网站常驻（托管网站登录态，供 AI 取文件/代操作）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/resident
+ExecStart=/usr/bin/node %h/resident/server.js
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+Environment=PORT=8901
+Environment=HOST=127.0.0.1
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
