@@ -2,9 +2,18 @@
 
 [English](README.md) · **简体中文**
 
-自托管的网站登录态保活与文件空间。Resident 保存站点 Cookie 或请求头，定期检查会话，并提供带凭据的读取接口；配套 Chromium 扩展可从当前网页读取 Cookie（包括 HttpOnly）并写入服务。Space 把指定目录变成一个可浏览、可下载的网页。
+**面向云端和本地 AI Agent 的常驻网站登录态桥接服务。**把 Resident 部署在常驻服务器或掌上主机上，保存网站 Cookie 或请求头并定期访问目标页面，检查并尽量维持登录态。云端／本地 Agent，以及 Agent 的云端中间管理站，可以通过鉴权 API 随时抓取该网站的文件和信息，不必每次重新在浏览器登录。配套 Chromium 扩展可在掌上主机或其他电脑上采集、更新和管理已保存的 Cookie（包括 HttpOnly）。Space 则提供可选的目录下载页面。
 
-> Self-hosted session keeper and file space, with a Chromium cookie helper. The two services use Node.js built-ins only; no npm install is required.
+> Always-on website sessions for local and cloud AI agents, with authenticated content fetching and a Chromium cookie helper.
+
+## AI Agent 如何使用
+
+```text
+掌上主机或电脑上的浏览器 → Cookie 助手 → 常驻服务器上的 Resident
+云端／本地 AI Agent 或中间管理站 → 带令牌的 Resident API → 目标网站
+```
+
+Resident 在常驻主机上保存网站登录态。Agent 调用 `/api/sites/:id/fetch`，便可使用已保存的凭据获取页面、文件或其他信息。定时检测可以帮助延长按闲置时间计算的会话，但不能突破网站设置的绝对过期时间或其他认证限制。Agent 通过 HTTP API 接入，不依赖特定的 Agent 框架。
 
 ## 项目组成
 
