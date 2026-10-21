@@ -2,14 +2,23 @@
 
 **English** · [简体中文](README.zh-CN.md)
 
-Cookie Catchsaver combines two self-hosted Node.js services:
+Cookie Catchsaver is an **always-on website session bridge for local and cloud AI agents**. Deploy Resident on a server or a small always-on computer, including a handheld PC, so an agent or a cloud-based agent management hub can request website files and information through an authenticated API without signing in through a browser for every task.
 
-- **Resident** stores a website's login cookies or request headers, checks whether the session still works, and exposes an authenticated API for fetching content with those credentials. A Chromium extension can capture cookies from the current tab, including HttpOnly cookies, and send them to your own Resident instance.
-- **Space** serves a directory as a browsable file download page.
+- **Resident** stores website cookies or request headers, periodically visits configured pages to check and help keep sessions active, and fetches content for authorized agents. A Chromium extension captures cookies from the current tab, including HttpOnly cookies, and lets you update and manage the saved sessions from a handheld PC or another computer.
+- **Space** is an optional browsable file download page for a directory on the host.
 
 Both services use Node.js built-ins only. No npm packages or build step are required.
 
 > **Before exposing Space to the internet:** anyone who can access `/space/` can download **and permanently delete** its files. Space has no authentication. Put it behind access control or use it only on a trusted network.
+
+## How agents use it
+
+```text
+Browser on a handheld or desktop host → Cookie Helper → Resident on an always-on server
+Cloud/local AI agent or management hub → token-protected Resident API → target website
+```
+
+Resident holds the website session on the always-on host. Agents call `/api/sites/:id/fetch` to retrieve pages, files, or other information using the stored credentials. The periodic checks can extend sessions with idle timeouts, but cannot override a site's absolute expiration or other authentication rules. Agent integration is through the HTTP API; no specific agent framework is required.
 
 ## What is included
 
