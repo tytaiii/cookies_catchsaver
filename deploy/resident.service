@@ -21,6 +21,14 @@ RestartSec=3
 Environment=NODE_ENV=production
 Environment=PORT=8901
 Environment=HOST=127.0.0.1
+# 可选：
+# Environment=SITE_LABEL=Resident
+# Environment=TOKEN_MAX_AGE_DAYS=30
+# Environment=AUTH_MAX_FAILS=10
+# Environment=AUTH_WINDOW_SEC=60
+# Environment=AUTH_BLOCK_SEC=300
+# 仅在可信反代覆盖 CF-Connecting-IP 时启用：
+# Environment=TRUST_PROXY=1
 NoNewPrivileges=true
 PrivateTmp=true
 

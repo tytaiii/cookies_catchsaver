@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "host": "smtp.example.com",
+  "port": 465,
+  "user": "you@example.com",
+  "pass": "邮箱授权码",
+  "from": "you@example.com",
+  "to": "you@example.com",
+  "minIntervalHours": 6
+}

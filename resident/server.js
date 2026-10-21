@@ -19,6 +19,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const tls = require('node:tls');
 
 // ---------------------------------------------------------------- 常量
 
@@ -31,11 +32,15 @@ const PUBLIC_DIR = path.join(ROOT, 'public');
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 8901);
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 
 // 管理界面现在在浏览器扩展里。把 SERVE_WEB 设成 0 可以让服务端只提供接口，
 // 不再对外给出 /resident/ 这个页面（纯接口模式，更轻）。
 const SERVE_WEB = String(process.env.SERVE_WEB == null ? '1' : process.env.SERVE_WEB) !== '0';
+
+// 页面标题与页脚里的站点名，部署时用环境变量覆盖
+const SITE_LABEL = String(process.env.SITE_LABEL || 'Resident');
+const escapeHtml = (text) => String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const DEFAULT_INTERVAL_MIN = 30;
 const MIN_INTERVAL_MIN = 5;
@@ -92,6 +97,8 @@ function log(...args) {
 
 const randomId = () => crypto.randomBytes(8).toString('hex');
 
+let tokenWasGenerated = false;
+
 function loadToken() {
   fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
   if (fs.existsSync(TOKEN_FILE)) {
@@ -99,12 +106,77 @@ function loadToken() {
     if (t) return t;
   }
   const t = crypto.randomBytes(24).toString('hex');
+  tokenWasGenerated = true;
   fs.writeFileSync(TOKEN_FILE, t + '\n', { mode: 0o600 });
   log('已生成 data/token.txt');
   return t;
 }
 
 const TOKEN = loadToken();
+
+// ---- 令牌有效期（可选）与认证失败限流 ----
+const TOKEN_META_FILE = path.join(DATA_DIR, 'token.meta.json');
+const TOKEN_MAX_AGE_DAYS = Number(process.env.TOKEN_MAX_AGE_DAYS || 0);
+
+function loadTokenMeta() {
+  const tokenHash = crypto.createHash('sha256').update(TOKEN).digest('hex');
+  try {
+    if (!tokenWasGenerated && fs.existsSync(TOKEN_META_FILE)) {
+      const j = JSON.parse(fs.readFileSync(TOKEN_META_FILE, 'utf8'));
+      if (j && Number(j.createdAt) > 0 && (!j.tokenHash || j.tokenHash === tokenHash)) {
+        const meta = { createdAt: Number(j.createdAt), tokenHash };
+        fs.writeFileSync(TOKEN_META_FILE, JSON.stringify(meta), { mode: 0o600 });
+        return meta;
+      }
+    }
+  } catch { /* 忽略 */ }
+  const fresh = { createdAt: Date.now(), tokenHash };
+  try { fs.writeFileSync(TOKEN_META_FILE, JSON.stringify(fresh), { mode: 0o600 }); } catch { /* 忽略 */ }
+  return fresh;
+}
+
+const TOKEN_META = loadTokenMeta();
+
+function tokenExpired() {
+  if (!TOKEN_MAX_AGE_DAYS) return false;
+  return Date.now() - TOKEN_META.createdAt > TOKEN_MAX_AGE_DAYS * 86400000;
+}
+
+const AUTH_MAX_FAILS = Number(process.env.AUTH_MAX_FAILS || 10);
+const AUTH_WINDOW_MS = Number(process.env.AUTH_WINDOW_SEC || 60) * 1000;
+const AUTH_BLOCK_MS = Number(process.env.AUTH_BLOCK_SEC || 300) * 1000;
+const authFails = new Map();   // ip -> { count, firstAt, blockedUntil }
+
+function clientIp(req) {
+  // 仅在受信反代会覆盖该请求头时启用；默认不相信客户端自报的 IP。
+  const forwarded = process.env.TRUST_PROXY === '1' && req.headers['cf-connecting-ip'];
+  return String(forwarded || req.socket.remoteAddress || 'unknown');
+}
+
+function authBlocked(ip) {
+  const rec = authFails.get(ip);
+  if (!rec) return false;
+  if (rec.blockedUntil && rec.blockedUntil > Date.now()) return true;
+  if (rec.blockedUntil && rec.blockedUntil <= Date.now()) authFails.delete(ip);
+  else if (!rec.blockedUntil && Date.now() - rec.firstAt > AUTH_WINDOW_MS) authFails.delete(ip);
+  return false;
+}
+
+function noteAuthFailure(ip) {
+  const now = Date.now();
+  let rec = authFails.get(ip);
+  if (!rec || now - rec.firstAt > AUTH_WINDOW_MS) {
+    rec = { count: 0, firstAt: now, blockedUntil: 0 };
+  }
+  rec.count += 1;
+  if (rec.count >= AUTH_MAX_FAILS) rec.blockedUntil = now + AUTH_BLOCK_MS;
+  if (!authFails.has(ip) && authFails.size >= 10000) authFails.delete(authFails.keys().next().value);
+  authFails.set(ip, rec);
+}
+
+function clearAuthFailure(ip) {
+  authFails.delete(ip);
+}
 
 // ---------------------------------------------------------------- GitHub 设备码登录
 //
@@ -113,6 +185,32 @@ const TOKEN = loadToken();
 //   2. 用户在 github.com/login/device 输入 user_code
 //   3. 本服务轮询 login/oauth/access_token，拿到 access_token
 // token 只存在内存里传给前端，落盘的是写进站点的请求头（加密）。
+
+// 允许跨域的扩展 ID。为空表示「还没钉住」，此时任何 chrome-extension 来源都能做预检，
+// 但只要有一次带正确令牌的请求从某个扩展发来，就把那个 ID 记下来，之后只认它。
+const EXT_FILE = path.join(DATA_DIR, 'extensions.json');
+let allowedExtIds = [];
+try {
+  if (fs.existsSync(EXT_FILE)) {
+    const j = JSON.parse(fs.readFileSync(EXT_FILE, 'utf8'));
+    if (j && Array.isArray(j.ids)) allowedExtIds = j.ids.filter((x) => typeof x === 'string' && x);
+  }
+} catch { /* 忽略损坏的文件 */ }
+
+function saveExtIds() {
+  try {
+    fs.writeFileSync(EXT_FILE, JSON.stringify({ ids: allowedExtIds }, null, 2), { mode: 0o600 });
+  } catch (e) {
+    log('写 extensions.json 失败：', e.message);
+  }
+}
+
+function recordExtId(id) {
+  if (!id || allowedExtIds.includes(id)) return;
+  allowedExtIds = [id];
+  saveExtIds();
+  log('已绑定浏览器扩展：', id);
+}
 
 const OAUTH_FILE = path.join(DATA_DIR, 'oauth.json');
 let oauthCfg = { clientId: '' };
@@ -135,7 +233,7 @@ function ghPost(url, form) {
     headers: {
       accept: 'application/json',
       'content-type': 'application/x-www-form-urlencoded',
-      'user-agent': 'tytai-resident',
+      'user-agent': 'resident-alert',
     },
     body: new URLSearchParams(form),
     signal: AbortSignal.timeout(20000),
@@ -238,6 +336,7 @@ function publicView(s, { reveal = false } = {}) {
     hasCookie: Boolean(s.cookie),
     hasHeaders: Boolean(s.headers),
     hasUA: Boolean(s.ua),
+    hints: s.hints || '',
     expect: s.expect || '',
     createdAt: s.createdAt,
     last: s.last || { status: 'unknown' },
@@ -309,12 +408,14 @@ async function readCap(res, cap) {
 }
 
 async function requestFollow(startUrl, opts) {
-  const { cookie, ua, extraHeaders, method = 'GET', body, contentType, timeoutMs = CHECK_TIMEOUT_MS, maxHops = 5, cap } = opts;
+  const { cookie, ua, extraHeaders, hints, method = 'GET', body, contentType, timeoutMs = CHECK_TIMEOUT_MS, maxHops = 5, cap } = opts;
   let url = startUrl;
   let m = method;
   let b = body;
   let ct = contentType;
+  let currentCookie = cookie;
   const chain = [];
+  const setCookies = [];   // 每一跳响应里的 Set-Cookie，交给调用方合并回存储
 
   for (let hop = 0; hop <= maxHops; hop++) {
     const headers = {
@@ -322,13 +423,19 @@ async function requestFollow(startUrl, opts) {
       'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
       'user-agent': ua || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36',
     };
+    // 客户端提示头（sec-ch-ua 之类），让请求看起来更像抓 cookie 的那个浏览器
+    if (hints && typeof hints === 'object') {
+      for (const [k, v] of Object.entries(hints)) {
+        if (k && v != null) headers[k] = String(v);
+      }
+    }
     // 站点自定义请求头（如 Authorization: Bearer <token>），可以覆盖上面的默认值
     if (extraHeaders && typeof extraHeaders === 'object') {
       for (const [k, v] of Object.entries(extraHeaders)) {
         if (k && v != null) headers[k] = String(v);
       }
     }
-    if (cookie) headers.cookie = cookie;
+    if (currentCookie) headers.cookie = currentCookie;
     if (ct) headers['content-type'] = ct;
 
     const res = await fetch(url, {
@@ -340,14 +447,21 @@ async function requestFollow(startUrl, opts) {
     });
 
     chain.push({ url, status: res.status });
+    if (typeof res.headers.getSetCookie === 'function') {
+      const received = res.headers.getSetCookie();
+      setCookies.push(...received);
+      // 同一条重定向链也要使用刚轮换的会话，而不是继续发送旧 Cookie。
+      const merged = mergeSetCookies(currentCookie, received, url);
+      if (merged != null) currentCookie = merged;
+    }
 
     if ([301, 302, 303, 307, 308].includes(res.status)) {
       const loc = res.headers.get('location');
       try { res.body?.cancel?.(); } catch { /* ignore */ }
-      if (!loc) return { res: { status: res.status, headers: res.headers }, finalUrl: url, chain, noBody: true };
+      if (!loc) return { res: { status: res.status, headers: res.headers }, finalUrl: url, chain, noBody: true, setCookies };
       const next = new URL(loc, url);
       if (!sameTarget(next.toString(), startUrl)) {
-        return { res: { status: res.status, headers: res.headers }, finalUrl: url, chain, noBody: true, crossOrigin: next.toString() };
+        return { res: { status: res.status, headers: res.headers }, finalUrl: url, chain, noBody: true, crossOrigin: next.toString(), setCookies };
       }
       if (res.status === 303 || ((res.status === 301 || res.status === 302) && m === 'POST')) {
         m = 'GET';
@@ -365,6 +479,7 @@ async function requestFollow(startUrl, opts) {
       chain,
       buf,
       truncated,
+      setCookies,
     };
   }
   throw new Error('重定向次数过多');
@@ -382,6 +497,215 @@ function extractTitle(html) {
   if (!html) return '';
   const m = html.match(/<title[^>]*>([\s\S]{0,200}?)<\/title>/i);
   return m ? m[1].replace(/\s+/g, ' ').trim() : '';
+}
+
+
+// ---------------------------------------------------------------- 邮件告警
+//
+// 站点从「正常」变成「登录失效 / 网址失效」时发一封信。配置放在 data/mail.json，
+// 文件不存在或 enabled 为假就完全不启用。没有引入任何依赖，SMTP 自己实现，
+// 只支持 465 端口的隐式 TLS + AUTH LOGIN，够发一封纯文本邮件。
+
+const MAIL_FILE = path.join(DATA_DIR, 'mail.json');
+let MAIL = { enabled: false };
+try {
+  if (fs.existsSync(MAIL_FILE)) {
+    const j = JSON.parse(fs.readFileSync(MAIL_FILE, 'utf8'));
+    if (j && typeof j === 'object') MAIL = j;
+  }
+} catch (e) {
+  log('mail.json 读取失败，告警关闭：', e.message);
+}
+
+function smtpSend(cfg, subject, text) {
+  return new Promise((resolve, reject) => {
+    const sock = tls.connect({ host: cfg.host, port: Number(cfg.port) || 465, servername: cfg.host });
+    let buf = '';
+    let settled = false;
+    const waiters = [];
+    const timer = setTimeout(() => fail(new Error('SMTP 超时')), 20000);
+
+    function fail(err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { sock.destroy(); } catch { /* 忽略 */ }
+      reject(err);
+    }
+
+    function finish() {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { sock.end(); } catch { /* 忽略 */ }
+      resolve();
+    }
+
+    function pump() {
+      const re = /^(?:\d{3}-[^\r\n]*(?:\r\n|\n))*(\d{3})[^\r\n]*(?:\r\n|\n)/;
+      let m;
+      while ((m = buf.match(re))) {
+        const code = Number(m[1]);
+        buf = buf.slice(m[0].length);
+        const w = waiters.shift();
+        if (w) w({ code, text: m[0] });
+      }
+    }
+
+    sock.on('data', (c) => { buf += c.toString('utf8'); pump(); });
+    sock.on('error', fail);
+    sock.on('close', () => { if (!settled) fail(new Error('SMTP 连接被关闭')); });
+
+    const read = () => new Promise((res) => { waiters.push(res); pump(); });
+    const write = (line) => sock.write(line + '\r\n');
+
+    (async () => {
+      try {
+        let r = await read();
+        if (r.code !== 220) throw new Error('握手失败 ' + r.code);
+        write('EHLO resident'); r = await read();
+        if (r.code !== 250) throw new Error('EHLO 失败 ' + r.code);
+        write('AUTH LOGIN'); r = await read();
+        if (r.code !== 334) throw new Error('不支持 AUTH LOGIN');
+        write(Buffer.from(cfg.user, 'utf8').toString('base64')); r = await read();
+        if (r.code !== 334) throw new Error('用户名被拒 ' + r.code);
+        write(Buffer.from(cfg.pass, 'utf8').toString('base64')); r = await read();
+        if (r.code !== 235) throw new Error('认证失败 ' + r.code);
+        write(`MAIL FROM:<${cfg.from}>`); r = await read();
+        if (r.code !== 250) throw new Error('MAIL FROM 被拒 ' + r.code);
+        write(`RCPT TO:<${cfg.to}>`); r = await read();
+        if (r.code !== 250 && r.code !== 251) throw new Error('收件人被拒 ' + r.code);
+        write('DATA'); r = await read();
+        if (r.code !== 354) throw new Error('DATA 被拒 ' + r.code);
+
+        const encodedBody = Buffer.from(text, 'utf8').toString('base64').replace(/(.{76})/g, '$1\r\n');
+        const head = [
+          `From: ${cfg.from}`,
+          `To: ${cfg.to}`,
+          `Subject: =?UTF-8?B?${Buffer.from(subject, 'utf8').toString('base64')}?=`,
+          `Date: ${new Date().toUTCString()}`,
+          'MIME-Version: 1.0',
+          'Content-Type: text/plain; charset=utf-8',
+          'Content-Transfer-Encoding: base64',
+        ].join('\r\n');
+        write(head + '\r\n\r\n' + encodedBody + '\r\n.');
+        r = await read();
+        if (r.code !== 250) throw new Error('投递失败 ' + r.code);
+        write('QUIT');
+        finish();
+      } catch (e) {
+        fail(e);
+      }
+    })();
+  });
+}
+
+function mailReady() {
+  return Boolean(MAIL && MAIL.enabled === true && MAIL.host && MAIL.user && MAIL.pass && MAIL.from && MAIL.to);
+}
+
+function sendAlertMail(site, status, reason) {
+  const label = status === 'expired' ? '登录失效' : '网址失效';
+  const subject = `[网站常驻] ${site.name} ${label}`;
+  const text = [
+    `站点：${site.name}`,
+    `网址：${site.url}`,
+    `状态：${label}`,
+    `原因：${reason || '（无）'}`,
+    `时间：${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
+    '',
+    '处理办法：用浏览器扩展在已登录的页面上点一下「写入并检测」，或者在管理面板里重新保存 cookie。',
+  ].join('\n');
+  return smtpSend(MAIL, subject, text);
+}
+
+/** 状态进入失效时发信；恢复后重置，避免反复打扰。 */
+function maybeAlert(site, status, reason) {
+  const bad = status === 'expired' || status === 'invalid';
+  const prev = site.alert || {};
+
+  if (!bad) {
+    if (status === 'valid' && prev.status) site.alert = {};
+    return;
+  }
+  if (!mailReady()) return;
+
+  const minMs = (Number(MAIL.minIntervalHours) || 6) * 3600000;
+  if (prev.status === status && Date.now() - Number(prev.at || 0) < minMs) return;
+
+  site.alert = { status, at: Date.now() };
+  sendAlertMail(site, status, reason)
+    .then(() => log(`已发送告警邮件：${site.name} / ${status}`))
+    .catch((e) => log('告警邮件发送失败：', site.name, e.message));
+}
+
+// ---------------------------------------------------------------- Cookie 合并
+//
+// 服务器响应里的 Set-Cookie 必须回写，否则遇到会轮换会话的站点，
+// 每次探测都在消耗旧 cookie、新 cookie 又丢掉，保活反而加速失效。
+// 这里按「同主机、未过期」把响应里的 cookie 合并进已存的那串。
+
+function splitSetCookie(raw, hostname) {
+  const text = String(raw || '');
+  const parts = text.split(';').map((x) => x.trim());
+  const pair = parts.shift() || '';
+  const eq = pair.indexOf('=');
+  if (eq <= 0) return null;
+
+  const name = pair.slice(0, eq).trim();
+  const value = pair.slice(eq + 1).trim();
+  if (!/^[A-Za-z0-9_.\-]{1,128}$/.test(name)) return null;
+
+  let maxAge = null;
+  let expires = null;
+  for (const attr of parts) {
+    const i = attr.indexOf('=');
+    const key = (i === -1 ? attr : attr.slice(0, i)).trim().toLowerCase();
+    const val = i === -1 ? '' : attr.slice(i + 1).trim();
+
+    if (key === 'max-age') {
+      if (/^-?\d+$/.test(val)) maxAge = Number(val);
+    } else if (key === 'expires') {
+      const t = Date.parse(val);
+      if (!Number.isNaN(t)) expires = t;
+    } else if (key === 'domain' && val) {
+      const d = val.replace(/^\./, '').toLowerCase();
+      if (hostname && hostname !== d && !hostname.endsWith('.' + d)) return null;
+    }
+  }
+  // Max-Age 优先于 Expires；空值本身是合法 Cookie，不代表删除。
+  const expired = maxAge != null ? maxAge <= 0 : expires != null && expires <= Date.now();
+  return { name, value, expired };
+}
+
+/** 返回合并后的 Cookie 请求头；没有变化时返回 null。 */
+function mergeSetCookies(current, rawList, targetUrl) {
+  let hostname = '';
+  try { hostname = new URL(targetUrl).hostname.toLowerCase(); } catch { /* 忽略 */ }
+
+  const jar = new Map();
+  for (const seg of String(current || '').split(';')) {
+    const x = seg.trim();
+    if (!x || !x.includes('=')) continue;
+    const i = x.indexOf('=');
+    jar.set(x.slice(0, i).trim(), x.slice(i + 1));
+  }
+
+  let changed = false;
+  for (const raw of rawList || []) {
+    const c = splitSetCookie(raw, hostname);
+    if (!c) continue;
+    if (c.expired) {
+      if (jar.delete(c.name)) changed = true;
+      continue;
+    }
+    if (jar.get(c.name) !== c.value) {
+      jar.set(c.name, c.value);
+      changed = true;
+    }
+  }
+  if (!changed) return null;
+  return [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
 }
 
 // ---------------------------------------------------------------- 检测
@@ -425,9 +749,17 @@ async function checkSite(site, { force = false } = {}) {
     const r = await requestFollow(site.url, {
       cookie,
       ua: site.ua,
+      hints: siteHints(site),
       extraHeaders: siteHeaders(site),
       cap: CHECK_BODY_CAP,
     });
+
+    // 服务端可能在响应里下发新 cookie（轮换、续期都会这样做），这里合并回存储
+    const mergedCheck = mergeSetCookies(cookie, r.setCookies, site.url);
+    if (mergedCheck != null) {
+      site.cookie = seal(mergedCheck);
+      log('cookie 已更新：', site.name);
+    }
 
     const httpStatus = r.res.status;
     const html = r.buf ? r.buf.toString('utf8') : '';
@@ -484,6 +816,8 @@ async function checkSite(site, { force = false } = {}) {
       title,
       ms: Date.now() - started,
     };
+
+    maybeAlert(site, status, reason);
   } catch (e) {
     const { timeout, code, detail } = describeFetchError(e);
     // 连不上（DNS/拒绝连接/超时/证书）统一算「打不开」，其余算「未知」
@@ -539,6 +873,16 @@ function validateSiteInput(input, { partial = false } = {}) {
     if (out.cookie.length > 200000) throw Object.assign(new Error('Cookie 过长（>200000 字符）'), { status: 400 });
   }
   if (!partial || input.ua !== undefined) out.ua = String(input.ua || '').trim().slice(0, 400);
+  if (!partial || input.hints !== undefined) {
+    const raw = String(input.hints || '').trim().slice(0, 1200);
+    const { headers, bad } = parseHeaders(raw);
+    const unsupported = Object.keys(headers).filter((k) => !['sec-ch-ua', 'sec-ch-ua-mobile', 'sec-ch-ua-platform'].includes(k.toLowerCase()));
+    bad.push(...unsupported);
+    if (bad.length) {
+      throw Object.assign(new Error('客户端提示头格式不对：' + bad.slice(0, 2).join(' / ')), { status: 400 });
+    }
+    out.hints = Object.keys(headers).map((k) => `${k}: ${headers[k]}`).join('\n');
+  }
   if (!partial || input.headers !== undefined) {
     const raw = String(input.headers || '').trim().slice(0, 8000);
     const { headers, bad } = parseHeaders(raw);
@@ -803,6 +1147,17 @@ function parseHeaders(text) {
   return { headers: out, bad };
 }
 
+/** 取出站点保存的客户端提示头（sec-ch-ua 等，明文，不算凭据）。 */
+function siteHints(site) {
+  if (!site || !site.hints) return null;
+  try {
+    const { headers } = parseHeaders(site.hints);
+    return Object.keys(headers).length ? headers : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 取出某站点已保存的自定义请求头（解不开就当作没有）。 */
 function siteHeaders(site) {
   if (!site || !site.headers) return null;
@@ -847,11 +1202,16 @@ async function handle(req, res) {
   // 浏览器扩展（chrome-extension:// 来源）直接调接口时放行跨域；
   // 普通网页来源一律不加 CORS 头，避免被别人的页面调用。
   const origin = String(req.headers.origin || '');
-  if (origin.startsWith('chrome-extension://')) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Headers', 'content-type, x-token, authorization');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
-    res.setHeader('Vary', 'Origin');
+  const extId = /^chrome-extension:\/\/([a-p]{32})$/.exec(origin)?.[1];
+  if (extId) {
+    // 白名单为空时允许，但只有带正确令牌的请求才会把 ID 钉下来
+    const allowed = allowedExtIds.length === 0 || allowedExtIds.includes(extId);
+    if (allowed) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Headers', 'content-type, x-token, authorization');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
+      res.setHeader('Vary', 'Origin');
+    }
   }
   if (method === 'OPTIONS' && pathname.startsWith('/api/')) {
     res.writeHead(204);
@@ -869,7 +1229,8 @@ async function handle(req, res) {
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
       return res.end('这个服务没有附带网页前端，请用浏览器扩展管理。\n');
     }
-    const buf = fs.readFileSync(f);
+    const html = fs.readFileSync(f, 'utf8').replace(/\{\{SITE\}\}/g, () => escapeHtml(SITE_LABEL));
+    const buf = Buffer.from(html, 'utf8');
     res.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'content-length': buf.length,
@@ -885,7 +1246,7 @@ async function handle(req, res) {
   }
 
   if (pathname === '/api/health') {
-    return send(res, 200, { ok: true, version: VERSION, sites: sites.length, authed: tokenOk(req) });
+    return send(res, 200, { ok: true, version: VERSION, sites: sites.length, authed: tokenOk(req) && !tokenExpired() });
   }
 
   // 公开的汇总数字（只给计数，不含网址/cookie），供首页卡片显示
@@ -901,11 +1262,49 @@ async function handle(req, res) {
     });
   }
 
+  const ip = clientIp(req);
+  if (authBlocked(ip)) {
+    return send(res, 429, { error: '认证失败次数过多，请稍后再试' });
+  }
   if (!tokenOk(req)) {
+    noteAuthFailure(ip);
     return send(res, 401, { error: '未授权：请在页面填入 token，或加 Authorization: Bearer <token>' });
+  }
+  if (tokenExpired()) {
+    return send(res, 401, {
+      error: `令牌已超过 ${TOKEN_MAX_AGE_DAYS} 天，删除 data/token.txt 后重启服务可重新生成`,
+    });
+  }
+  clearAuthFailure(ip);
+  if (extId) {
+    if (allowedExtIds.length && !allowedExtIds.includes(extId)) {
+      return send(res, 403, { error: '这个浏览器扩展未获授权，请检查 data/extensions.json' });
+    }
+    recordExtId(extId);
   }
 
   const m = pathname.match(/^\/api\/sites\/([^/]+)(\/[a-z]+)?$/);
+
+  // 发一封测试邮件，确认告警配置可用
+  if (pathname === '/api/mail/test' && method === 'POST') {
+    if (!mailReady()) {
+      return send(res, 400, { error: 'data/mail.json 未配置或 enabled 为 false' });
+    }
+    try {
+      await smtpSend(MAIL, '[网站常驻] 测试邮件', '这是一封测试邮件，收到说明告警配置可用。');
+      return send(res, 200, { ok: true, to: MAIL.to });
+    } catch (e) {
+      return send(res, 502, { error: '发送失败：' + e.message });
+    }
+  }
+
+  if (pathname === '/api/mail/status' && method === 'GET') {
+    return send(res, 200, {
+      ready: mailReady(),
+      to: mailReady() ? MAIL.to : '',
+      minIntervalHours: Number(MAIL.minIntervalHours) || 6,
+    });
+  }
 
   // ---- GitHub OAuth 设备码登录（需要页面 token 鉴权）----
   if (pathname === '/api/oauth/config' && method === 'GET') {
@@ -937,7 +1336,7 @@ async function handle(req, res) {
     try {
       gh = await ghPost('https://github.com/login/device/code', {
         client_id: clientId,
-        scope: String(body.scope || 'read:user repo'),
+        scope: String(body.scope || 'read:user'),   // 默认只要身份，仓库权限需要显式申请
       });
     } catch (e) {
       throw Object.assign(new Error('连不上 GitHub：' + (e.message || e)), { status: 502 });
@@ -1015,6 +1414,7 @@ async function handle(req, res) {
       url: v.url,
       cookie: seal(v.cookie),
       headers: seal(v.headers || ''),
+      hints: v.hints || '',
       ua: v.ua || '',
       expect: v.expect || '',
       intervalMin: v.intervalMin,
@@ -1045,6 +1445,7 @@ async function handle(req, res) {
       if (v.url !== undefined) site.url = v.url;
       if (v.cookie !== undefined) site.cookie = seal(finalizeCookie(v.cookie, v.url || site.url));
       if (v.headers !== undefined) site.headers = seal(v.headers);
+      if (v.hints !== undefined) site.hints = v.hints;
       if (v.ua !== undefined) site.ua = v.ua;
       if (v.expect !== undefined) site.expect = v.expect;
       if (v.intervalMin !== undefined) site.intervalMin = v.intervalMin;
@@ -1093,12 +1494,20 @@ async function handle(req, res) {
         const r = await requestFollow(target, {
           cookie,
           ua: site.ua,
+          hints: siteHints(site),
           extraHeaders: siteHeaders(site),
           method: m2,
           body,
           contentType,
           cap,
         });
+
+        const mergedFetch = mergeSetCookies(cookie, r.setCookies, target);
+        if (mergedFetch != null) {
+          site.cookie = seal(mergedFetch);
+          await save();
+          log('cookie 已更新（fetch）：', site.name);
+        }
         const ct = String(r.res.headers.get('content-type') || '');
         const isText = /^(text\/|application\/(json|xml|javascript|x-www-form-urlencoded))/i.test(ct) || ct === '';
         const payload = {

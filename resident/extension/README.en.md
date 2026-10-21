@@ -20,6 +20,9 @@ Remote service URLs require HTTPS. HTTP is accepted for `localhost` and `127.0.0
 
 Open a website where you are signed in, then click the extension icon. It shows the current page's cookie count and selects a matching Resident site when possible. Check the selection before clicking **Write and check**. You can create a new site, open the management panel, or use **Copy only**.
 
+
+When writing cookies, the extension also records the browser User-Agent and basic client hints. Resident 1.3.0 uses them for later HTTP requests. The first authenticated extension is bound to the server; to replace it, stop Resident, remove `data/extensions.json`, restart, and connect again.
+
 ## Permissions and data
 
 | Permission | Why it is needed |

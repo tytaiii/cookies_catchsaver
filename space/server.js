@@ -14,12 +14,21 @@ const http = require('node:http');
 const fs = require('node:fs');
 const fsp = fs.promises;
 const path = require('node:path');
-const os = require('node:os');
 
-const ROOT = path.resolve(process.env.SPACE_ROOT || path.join(os.homedir(), 'space-files'));
+const DEFAULT_ROOT = path.join(require('node:os').homedir(), 'space-files');
+const ROOT = path.resolve(process.env.SPACE_ROOT || DEFAULT_ROOT);
 const PORT = Number(process.env.PORT || 8902);
 const HOST = process.env.HOST || '127.0.0.1';
 const MAX_DEPTH = 6;
+
+// 页面标题和页脚里显示的名字，部署时用环境变量覆盖，比如 SITE_LABEL=example.com
+const SITE_LABEL = String(process.env.SITE_LABEL || 'Space');
+
+// 可选的访问令牌：设了 SPACE_TOKEN 就要求带令牌，不设则保持完全公开。
+// 带 ?token=xxx 打开一次会种一个 cookie，之后页面里的链接都能直接用。
+const ACCESS_TOKEN = String(process.env.SPACE_TOKEN || '').trim();
+const COOKIE_NAME = 'space_token';
+const COOKIE_MAX_AGE = 30 * 24 * 3600;
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -209,7 +218,7 @@ function pageHtml(relDir, items) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
-<title>下载空间</title>
+<title>下载空间 · ${esc(SITE_LABEL)}</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   :root {
@@ -284,7 +293,7 @@ function pageHtml(relDir, items) {
   <div class="list">
     ${items.length ? rows : '<div class="empty">这个文件夹还是空的</div>'}
   </div>
-  <footer>Space · 公开文件下载</footer>
+  <footer>Space · ${esc(SITE_LABEL)}</footer>
 </div>
 <script>
   // 删除：公开操作，只做一次确认，不做权限校验
@@ -437,6 +446,36 @@ const server = http.createServer(async (req, res) => {
   try {
     const u = new URL(req.url, 'http://localhost');
     const p = u.searchParams.get('p') || '';
+
+    // ---- 可选鉴权（健康检查放行，方便反代探活）----
+    if (ACCESS_TOKEN && u.pathname !== '/health') {
+      const q = u.searchParams.get('token') || '';
+      const h = String(req.headers['x-token'] || '');
+      const cookies = String(req.headers.cookie || '');
+      const ck = (cookies.match(new RegExp('(?:^|;\\s*)' + COOKIE_NAME + '=([^;]+)')) || [])[1] || '';
+      let decodedCookie = '';
+      try { decodedCookie = decodeURIComponent(ck); } catch { /* 无效 Cookie 按未授权处理 */ }
+      const provided = q || h || decodedCookie;
+      res.setHeader('cache-control', 'no-store');
+      res.setHeader('referrer-policy', 'no-referrer');
+
+      if (provided !== ACCESS_TOKEN) {
+        res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+        return res.end('需要访问令牌：在地址后面加 ?token=你的令牌 打开一次即可。\n');
+      }
+      if (q) {
+        // 令牌在 URL 里出现过，顺手种 cookie，后续链接就不用再带
+        const secure = req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
+        res.setHeader('set-cookie',
+          `${COOKIE_NAME}=${encodeURIComponent(ACCESS_TOKEN)}; Path=/; Max-Age=${COOKIE_MAX_AGE}; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`);
+        if (req.method === 'GET' || req.method === 'HEAD') {
+          u.searchParams.delete('token');
+          // 仅跳转查询串，保留反代后浏览器看到的 /space/ 前缀。
+          res.writeHead(303, { location: u.search || '?' });
+          return res.end();
+        }
+      }
+    }
 
     const method = req.method;
     if (!['GET', 'HEAD', 'DELETE'].includes(method)) {

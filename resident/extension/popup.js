@@ -143,6 +143,27 @@ function cookieHeader() {
   return list.join('; ');
 }
 
+/**
+ * 抓取当前浏览器的身份特征，随 cookie 一起写入站点。
+ * 服务端会用它替代硬编码的 UA，并补上 sec-ch-ua 这些客户端提示头。
+ */
+function clientIdentity() {
+  const ua = navigator.userAgent || '';
+  let hints = '';
+  try {
+    const d = navigator.userAgentData;
+    if (d && Array.isArray(d.brands) && d.brands.length) {
+      const brands = d.brands.map((b) => `"${b.brand}";v="${b.version}"`).join(', ');
+      hints = [
+        `sec-ch-ua: ${brands}`,
+        `sec-ch-ua-mobile: ${d.mobile ? '?1' : '?0'}`,
+        `sec-ch-ua-platform: "${d.platform}"`,
+      ].join('\n');
+    }
+  } catch { /* 浏览器不支持就算了 */ }
+  return { ua, hints };
+}
+
 async function writeToSite() {
   const id = $('target').value;
   if (!id) {
@@ -156,7 +177,7 @@ async function writeToSite() {
   try {
     await api('/api/sites/' + encodeURIComponent(id), {
       method: 'PATCH',
-      body: JSON.stringify({ cookie: header }),
+      body: JSON.stringify(Object.assign({ cookie: header }, clientIdentity())),
     });
     const d = await api('/api/sites/' + encodeURIComponent(id) + '/check', { method: 'POST' });
     const last = (d.site && d.site.last) || d.last || {};
@@ -188,7 +209,7 @@ async function createAndWrite() {
     if (!name || name.length > 40) name = state.host;
     const created = await api('/api/sites', {
       method: 'POST',
-      body: JSON.stringify({ name, url: state.tabUrl, cookie: header }),
+      body: JSON.stringify(Object.assign({ name, url: state.tabUrl, cookie: header }, clientIdentity())),
     });
     const id = created.site && created.site.id;
     if (!id) throw new Error('服务端没有返回新站点');

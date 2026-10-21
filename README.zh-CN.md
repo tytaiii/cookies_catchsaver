@@ -15,6 +15,12 @@
 
 Resident 在常驻主机上保存网站登录态。Agent 调用 `/api/sites/:id/fetch`，便可使用已保存的凭据获取页面、文件或其他信息。定时检测可以帮助延长按闲置时间计算的会话，但不能突破网站设置的绝对过期时间或其他认证限制。Agent 通过 HTTP API 接入，不依赖特定的 Agent 框架。
 
+## 1.3.0 更新
+
+Resident 会把响应中的 `Set-Cookie` 合并回加密存储，重定向过程中也会使用刚轮换的 Cookie。扩展写入 Cookie 时还会同步当前浏览器的 User-Agent 和基础 `sec-ch-ua` 提示头，帮助服务器复现请求。这不能模拟浏览器的 TLS 指纹，也不能突破网站的认证限制。
+
+新增可选的登录失效邮件告警、认证失败限流、访问令牌有效期和扩展来源绑定。Space 新增可选令牌保护，覆盖目录列表、下载和删除操作。
+
 ## 项目组成
 
 | 目录 | 用途 |
@@ -56,6 +62,37 @@ Resident 页面位于 `http://127.0.0.1:8901/`，访问令牌在 `resident/data/
 
 `SPACE_ROOT` 可指定下载目录，默认 `~/space-files`。`PORT`、`HOST` 可调整监听地址和端口。设置 `SERVE_WEB=0` 可关闭 Resident 网页，保留 API 和扩展管理界面。若设置 `SERVE_WEB=0`，扩展需要手动填写令牌，无法从网页自动读取。
 
+## 可选配置
+
+在相应服务的 systemd 单元或启动终端中设置环境变量，然后重启服务：
+
+| 配置 | 服务 | 默认值与用途 |
+| --- | --- | --- |
+| `SITE_LABEL` | 两者 | `Resident` / `Space`；网页中显示的名称 |
+| `SPACE_TOKEN` | Space | 未设置；设置强令牌后要求访问鉴权 |
+| `TOKEN_MAX_AGE_DAYS` | Resident | `0`，关闭过期检查；可设置令牌有效天数 |
+| `AUTH_MAX_FAILS` | Resident | `10`；触发临时封禁的认证失败次数 |
+| `AUTH_WINDOW_SEC` | Resident | `60`；统计失败次数的时间窗口 |
+| `AUTH_BLOCK_SEC` | Resident | `300`；封禁时长，期间正确令牌也返回 429 |
+| `TRUST_PROXY` | Resident | `0`；仅在可信反代会覆盖 `CF-Connecting-IP` 时设为 `1` |
+
+未启用 `TRUST_PROXY` 时按直接连接的 IP 限流；经过 nginx 时，多个客户端可能共用一个限流计数。Resident 令牌过期后，删除 `resident/data/token.txt` 并重启服务即可生成新令牌及新的创建时间，之后更新客户端中的令牌。
+
+设置 `SPACE_TOKEN` 后，Agent 可用 `X-Token: <Space令牌>`。浏览器首次打开 `https://你的域名/space/?token=<经过URL编码的令牌>`，服务会设置 HttpOnly、SameSite Cookie（HTTPS 下增加 Secure），再跳转移除可见 URL 中的令牌。首次访问的 URL 仍可能进入浏览历史或代理日志。健康检查 `/health` 保持公开。
+
+### 邮件告警
+
+把 `deploy/mail.example.json` 复制到 `~/resident/data/mail.json`，填写 SMTP 账号、发件人、收件人和邮箱授权码，限制为 `600` 权限，再重启 Resident。配置不存在、不完整或 `enabled` 不为 `true` 时不发邮件。SMTP 客户端支持隐式 TLS（通常为 465 端口）及 AUTH LOGIN，不支持 587 端口的 STARTTLS。
+
+```bash
+chmod 600 ~/resident/data/mail.json
+systemctl --user restart resident
+curl -X POST -H "X-Token: $(cat ~/resident/data/token.txt)" \
+  http://127.0.0.1:8901/api/mail/test
+```
+
+同一失效状态在 `minIntervalHours` 内最多告警一次，默认 6 小时；检测恢复有效后重置。首次通过认证的扩展 ID 会保存到 `resident/data/extensions.json`。更换扩展时，先停止 Resident，删除此文件，再启动并用目标扩展连接。
+
 ## 浏览器扩展
 
 在 Chrome、Edge 或 Brave 的扩展页面启用开发者模式，选择“加载已解压的扩展程序”，指向 `resident/extension/`。该目录也提供 Windows、macOS、Linux 的安装辅助脚本；脚本只复制扩展文件并打开扩展管理页，仍需手动加载。
@@ -75,6 +112,8 @@ Resident 页面位于 `http://127.0.0.1:8901/`，访问令牌在 `resident/data/
 | GET / PATCH / DELETE | `/api/sites/:id` | 查看、修改、删除站点；`?reveal=1` 返回解密后的凭据 |
 | POST | `/api/sites/:id/check` | 立即检测登录态 |
 | GET / POST | `/api/sites/:id/fetch` | 携带已保存的凭据读取内容或发起请求 |
+| GET | `/api/mail/status` | 查看邮件告警是否配置完成 |
+| POST | `/api/mail/test` | 使用已配置的 SMTP 账号发送测试邮件 |
 
 通过 nginx 访问时，给上述路径加 `/resident` 前缀。例如：
 
@@ -87,10 +126,15 @@ curl -H "X-Token: $TOKEN" https://你的域名/resident/api/sites
 
 ## 安全边界
 
-- **Space 没有身份验证，下载和删除都对能访问 `/space/` 的人开放，删除没有回收站。** 不要把它暴露给不可信用户，也不要把唯一副本放进去。`noindex` 和隧道本身都不能代替访问控制。
+- **Space 未设置 `SPACE_TOKEN` 时保持公开，删除没有回收站。** 任何拥有访问权限的人都能下载和删除，不要放唯一副本。`noindex` 和隧道本身不能代替访问控制。
 - Resident 令牌相当于读取与使用所托管登录态的权限。请使用 HTTPS、限制服务访问范围，并妥善保管令牌和备份。加密存储不能防止能同时读取数据和密钥的服务器使用者。
 - 扩展需要 `cookies` 和 `<all_urls>` 权限来读取当前网页的 Cookie；只有用户点击写入时才会把 Cookie 发送到配置的 Resident 服务。请只连接你信任的服务。
 - Resident 是 HTTP 客户端，不是完整浏览器。需要 JavaScript 挑战、动态令牌或绑定 IP 的站点可能无法保活。
+- 每个站点保存的是 Cookie 请求头，不是完整的浏览器 Cookie 容器；不单独跟踪路径范围或不同路径上的同名 Cookie。自动续存不能突破绝对过期时间或浏览器特定的安全检查。
+
+## 验证
+
+使用 Node.js 22+ 运行 `node --test tests/services.test.js`。测试使用临时数据及本地 HTTP、SMTP 测试服务，无需真实网站登录态或邮箱账号。
 
 ## 备份与许可证
 

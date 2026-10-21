@@ -9,7 +9,7 @@ Cookie Catchsaver is an **always-on website session bridge for local and cloud A
 
 Both services use Node.js built-ins only. No npm packages or build step are required.
 
-> **Before exposing Space to the internet:** anyone who can access `/space/` can download **and permanently delete** its files. Space has no authentication. Put it behind access control or use it only on a trusted network.
+> **Space access:** set `SPACE_TOKEN` to protect the shared directory. When it is unset, anyone who can access `/space/` can download **and permanently delete** its files. Anyone with the token also has deletion permission; keep backups elsewhere.
 
 ## How agents use it
 
@@ -19,6 +19,12 @@ Cloud/local AI agent or management hub → token-protected Resident API → targ
 ```
 
 Resident holds the website session on the always-on host. Agents call `/api/sites/:id/fetch` to retrieve pages, files, or other information using the stored credentials. The periodic checks can extend sessions with idle timeouts, but cannot override a site's absolute expiration or other authentication rules. Agent integration is through the HTTP API; no specific agent framework is required.
+
+## Session renewal and alerts (1.3.0)
+
+Resident saves session cookies returned in `Set-Cookie`, including during redirects, so rotated credentials can be reused by the next request. The extension also sends the current browser's User-Agent and basic `sec-ch-ua` hints when writing cookies. These help reproduce HTTP requests, but cannot reproduce a browser's TLS fingerprint or bypass a site's authentication rules.
+
+Optional email alerts report expired sessions or invalid URLs. Resident also supports authentication failure limits, optional access-token expiration, and binding browser API access to the first authenticated extension. Space adds optional token protection for its listing, downloads, and deletion endpoints.
 
 ## What is included
 
@@ -62,6 +68,37 @@ Resident also creates `resident/data/secret.key` and `resident/data/sites.json`.
 
 Use `SPACE_ROOT` to choose the shared directory; its default is `~/space-files`. `PORT` and `HOST` control each service's listener. Set `SERVE_WEB=0` for an API-only Resident instance; in that mode, enter the token manually in the extension because there is no web page from which to retrieve it.
 
+## Optional configuration
+
+Set these environment variables in the relevant systemd service or shell, then restart the service:
+
+| Setting | Service | Default / purpose |
+| --- | --- | --- |
+| `SITE_LABEL` | Both | `Resident` / `Space`; name shown on the web page |
+| `SPACE_TOKEN` | Space | Unset; set a strong token to require access authorization |
+| `TOKEN_MAX_AGE_DAYS` | Resident | `0` (disabled); maximum age of the Resident access token |
+| `AUTH_MAX_FAILS` | Resident | `10`; failed attempts before a temporary block |
+| `AUTH_WINDOW_SEC` | Resident | `60`; failure-counting window |
+| `AUTH_BLOCK_SEC` | Resident | `300`; block duration, including requests with a correct token |
+| `TRUST_PROXY` | Resident | `0`; set to `1` only behind a trusted proxy that replaces `CF-Connecting-IP` |
+
+Without `TRUST_PROXY=1`, limits use the direct connection's IP; behind nginx this can group clients together. If a Resident token expires, delete `resident/data/token.txt` and restart Resident to generate a fresh token and creation time, then update your clients.
+
+When `SPACE_TOKEN` is set, agents can send `X-Token: <space-token>`. For browser access, open `https://your-domain.example/space/?token=<URL-encoded-token>` once. Space sets an HttpOnly, SameSite cookie (Secure on HTTPS) and redirects to remove the token from the visible URL. The initial URL can still appear in browser history or proxy logs. `/health` remains public.
+
+### Email alerts
+
+Copy `deploy/mail.example.json` to `~/resident/data/mail.json`, replace the example SMTP account, sender, recipient, and app password, restrict the file to mode `600`, then restart Resident. No email is sent unless a complete configuration has `enabled: true`. The built-in SMTP client supports implicit TLS (usually port 465) and AUTH LOGIN; STARTTLS on port 587 is not supported.
+
+```bash
+chmod 600 ~/resident/data/mail.json
+systemctl --user restart resident
+curl -X POST -H "X-Token: $(cat ~/resident/data/token.txt)" \
+  http://127.0.0.1:8901/api/mail/test
+```
+
+The same expired/invalid state is rate limited to one alert per `minIntervalHours` (default 6). A successful session check resets the alert state. After the first authenticated extension request, its ID is saved in `resident/data/extensions.json`. To replace that extension, stop Resident, remove this file, restart Resident, and connect with the intended extension.
+
 ## Chromium extension
 
 Open the extensions page in Chrome, Edge, or Brave, enable developer mode, and load `resident/extension/` as an unpacked extension. Optional Windows, macOS, and Linux helper scripts copy the extension to a stable location and open the extensions page; you still load it manually.
@@ -81,6 +118,8 @@ All endpoints except `/api/health` and `/api/summary` require `X-Token: <token>`
 | GET / PATCH / DELETE | `/api/sites/:id` | Read, update, or delete a site; `?reveal=1` returns decrypted credentials |
 | POST | `/api/sites/:id/check` | Check a session immediately |
 | GET / POST | `/api/sites/:id/fetch` | Make a request using saved credentials |
+| GET | `/api/mail/status` | Check whether email alerts are configured |
+| POST | `/api/mail/test` | Send a test message using the configured SMTP account |
 
 When using nginx, prefix these paths with `/resident`:
 
@@ -93,10 +132,15 @@ curl -H "X-Token: $TOKEN" https://your-domain.example/resident/api/sites
 
 ## Security and limitations
 
-- **Space has no authentication or recycle bin.** Anyone who can reach `/space/` can delete files and folders. Search-engine `noindex` and a tunnel do not provide access control. Keep backups elsewhere.
+- **Space is public unless `SPACE_TOKEN` is set, and has no recycle bin.** Access to the shared directory includes deletion permission. Search-engine `noindex` and a tunnel do not provide access control. Keep backups elsewhere.
 - The Resident token grants access to the stored sessions. Use HTTPS for remote access, restrict who can reach the service, and protect both the token and backups. Encryption at rest cannot protect data from someone who can read both the site data and its key.
 - The extension requests `cookies` and `<all_urls>` permissions to work with sites and self-hosted service URLs. It sends cookies to the configured Resident service only after you click a write action. Connect only to a service you trust.
 - Resident is an HTTP client, not a full browser. Sites that require JavaScript challenges, dynamic tokens, or IP-bound sessions may not work.
+- Cookies are stored as a Cookie header per configured site, not a complete browser cookie jar. Path-specific and same-name cookies on different paths are not tracked separately. Session renewal does not override absolute expiry or browser-specific security checks.
+
+## Verification
+
+Run the local integration checks with `node --test tests/services.test.js` (Node.js 22+). They use temporary data and local HTTP/SMTP fixtures; no real website sessions or SMTP account are required.
 
 ## Backup and license
 

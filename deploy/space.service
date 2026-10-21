@@ -18,6 +18,10 @@ RestartSec=3
 Environment=NODE_ENV=production
 Environment=PORT=8902
 Environment=HOST=127.0.0.1
+# 可选：设令牌后才允许列目录、下载和删除；不设则公开
+# Environment=SPACE_TOKEN=replace-with-a-strong-token
+# Environment=SITE_LABEL=Space
+# Environment=SPACE_ROOT=%h/space-files
 NoNewPrivileges=true
 PrivateTmp=true
 
