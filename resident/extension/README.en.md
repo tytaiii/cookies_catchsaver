@@ -12,13 +12,13 @@ In Chrome, Edge, or Brave, enable developer mode on the extensions page and load
 
 1. Deploy Resident behind HTTPS at `https://your-domain.example/resident/`.
 2. In the extension's service settings, enter `https://your-domain.example/resident` and save. No server is preconfigured.
-3. Either paste the token from `~/resident/data/token.txt`, or sign in to the Resident web page in the same browser and click **Auto connect**. Auto connect searches only `/resident/` pages on the configured origin.
+3. Either paste the token from `~/resident/data/token.txt`, or sign in to the Resident web page in the same browser and click **Auto connect**. Auto connect searches only the configured service page on the configured origin. For a local service without nginx, enter `http://127.0.0.1:8901` and sign in at that root page.
 
 Remote service URLs require HTTPS. HTTP is accepted for `localhost` and `127.0.0.1`. If `SERVE_WEB=0`, enter the token manually because the web page is disabled.
 
 ## Daily use
 
-Open a website where you are signed in, then click the extension icon. It shows the current page's cookie count and selects a matching Resident site when possible. Check the selection before clicking **Write and check**. You can create a new site, open the management panel, or use **Copy only**.
+Open a website where you are signed in, then click the extension icon. It shows the current page's cookie count and selects a Resident site only when its protocol, hostname, and port exactly match the current page. Otherwise, select a destination explicitly or create a new site. Check the selection before clicking **Write and check**. You can create a new site, open the management panel, or use **Copy only**.
 
 
 When writing cookies, the extension also records the browser User-Agent and basic client hints. Resident 1.3.0 uses them for later HTTP requests. The first authenticated extension is bound to the server; to replace it, stop Resident, remove `data/extensions.json`, restart, and connect again.

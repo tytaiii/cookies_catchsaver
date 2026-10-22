@@ -17,7 +17,7 @@ Resident 在常驻主机上保存网站登录态。Agent 调用 `/api/sites/:id/
 
 ## 1.3.0 更新
 
-Resident 会把响应中的 `Set-Cookie` 合并回加密存储，重定向过程中也会使用刚轮换的 Cookie。扩展写入 Cookie 时还会同步当前浏览器的 User-Agent 和基础 `sec-ch-ua` 提示头，帮助服务器复现请求。这不能模拟浏览器的 TLS 指纹，也不能突破网站的认证限制。
+Resident 会把响应中的 `Set-Cookie` 合并回加密存储，重定向过程中也会使用刚轮换的 Cookie。同一站点的请求依次使用最新会话，不同站点仍可并行；读取后续响应失败时也会保留已收到的续期 Cookie，旧响应不会覆盖用户刚手动更新的凭据。扩展写入 Cookie 时还会同步当前浏览器的 User-Agent 和基础 `sec-ch-ua` 提示头，帮助服务器复现请求。这不能模拟浏览器的 TLS 指纹，也不能突破网站的认证限制。
 
 新增可选的登录失效邮件告警、认证失败限流、访问令牌有效期和扩展来源绑定。Space 新增可选令牌保护，覆盖目录列表、下载和删除操作。
 
@@ -91,13 +91,13 @@ curl -X POST -H "X-Token: $(cat ~/resident/data/token.txt)" \
   http://127.0.0.1:8901/api/mail/test
 ```
 
-同一失效状态在 `minIntervalHours` 内最多告警一次，默认 6 小时；检测恢复有效后重置。首次通过认证的扩展 ID 会保存到 `resident/data/extensions.json`。更换扩展时，先停止 Resident，删除此文件，再启动并用目标扩展连接。
+成功投递后，同一失效状态在 `minIntervalHours` 内最多告警一次，默认 6 小时；投递失败可在下次检测时重试，检测恢复有效后重置。首次通过认证的扩展 ID 会保存到 `resident/data/extensions.json`。更换扩展时，先停止 Resident，删除此文件，再启动并用目标扩展连接。
 
 ## 浏览器扩展
 
 在 Chrome、Edge 或 Brave 的扩展页面启用开发者模式，选择“加载已解压的扩展程序”，指向 `resident/extension/`。该目录也提供 Windows、macOS、Linux 的安装辅助脚本；脚本只复制扩展文件并打开扩展管理页，仍需手动加载。
 
-首次使用时，在扩展的“服务设置”填写**你自己的** `https://你的域名/resident`。随后可以手动输入令牌，或先在同一浏览器打开并登录该服务页面，再点“自动连接”。自动连接只查找与所填服务地址同源的 `/resident/` 页面。远程服务必须使用 HTTPS；本机 `localhost`、`127.0.0.1` 可用 HTTP。
+首次使用时，在扩展的“服务设置”填写**你自己的** `https://你的域名/resident`。随后可以手动输入令牌，或先在同一浏览器打开并登录该服务页面，再点“自动连接”。自动连接只查找与所填服务地址同源的服务页面。没有 nginx 的本机实例可直接填写 `http://127.0.0.1:8901`，并在服务根页面登录。远程服务必须使用 HTTPS；本机 `localhost`、`127.0.0.1` 可用 HTTP。
 
 在目标网站登录后打开扩展，选择一个常驻站，点击“写入并检测”；也可新建站点或只复制 Cookie。详细说明见 [扩展文档](resident/extension/README.md)。
 
@@ -132,9 +132,13 @@ curl -H "X-Token: $TOKEN" https://你的域名/resident/api/sites
 - Resident 是 HTTP 客户端，不是完整浏览器。需要 JavaScript 挑战、动态令牌或绑定 IP 的站点可能无法保活。
 - 每个站点保存的是 Cookie 请求头，不是完整的浏览器 Cookie 容器；不单独跟踪路径范围或不同路径上的同名 Cookie。自动续存不能突破绝对过期时间或浏览器特定的安全检查。
 
+## 升级到 1.3.1
+
+替换代码时保留 `resident/data/` 和 Space 中的文件，然后重启服务，在浏览器扩展页重新加载扩展。已有 HTTPS nginx 配置需在 Space 的 location 中补上 `proxy_set_header X-Forwarded-Proto $scheme;`，验证并重载 nginx，让 Space 正确设置 Secure Cookie。配置示例和新生成的 location 已包含此行；安装脚本不会改写已有 location。如果 TLS 在 nginx 之前的可信网关终止，应传递该网关提供的原始协议。
+
 ## 验证
 
-使用 Node.js 22+ 运行 `node --test tests/services.test.js`。测试使用临时数据及本地 HTTP、SMTP 测试服务，无需真实网站登录态或邮箱账号。
+使用 Node.js 22+ 运行 `node --test`。测试使用临时数据及本地 HTTP、SMTP 测试服务，无需真实网站登录态或邮箱账号。
 
 ## 备份与许可证
 

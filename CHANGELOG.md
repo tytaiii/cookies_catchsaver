@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.1 — 2026-10-22
+
+- Serialize requests per site so concurrent agents use each newly rotated session.
+- Persist cookie renewal before later redirects or response body reads can fail.
+- Prevent in-flight responses from overwriting manually replaced credentials.
+- Retry failed alert deliveries on a later check; start alert throttling only after successful delivery.
+- Support direct local service URLs in both extension panels and restrict automatic site selection to an exact origin.
+- Forward the HTTPS protocol in nginx examples and generated locations so Space can set Secure cookies.
+- Add regression coverage: 12 tests pass, plus a local real-TLS SMTP check that accepts a trusted certificate and rejects an untrusted one.
+
 ## 1.3.0 — 2026-10-22
 
 - Renew stored session cookies from Set-Cookie responses, including within redirect chains.

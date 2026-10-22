@@ -149,6 +149,68 @@ test('Resident pins an authenticated extension and rate limits spoofed-IP attemp
   assert.equal((await api(base, '/api/mail/test', { method: 'POST' })).status, 400);
 });
 
+test('Concurrent agent fetches reuse each newly rotated session instead of racing', async (t) => {
+  let generation = 0;
+  const port = await listen(t, http.createServer((req, res) => {
+    if (req.headers.cookie !== `session=${generation}`) {
+      res.writeHead(401); return res.end('old session');
+    }
+    generation++;
+    const next = generation;
+    setTimeout(() => {
+      res.writeHead(200, { 'set-cookie': `session=${next}; Path=/` });
+      res.end('signed in');
+    }, 40);
+  }));
+  const { base } = await startService(t, 'resident');
+  const created = await api(base, '/api/sites', { method: 'POST', body: JSON.stringify({ url: `http://127.0.0.1:${port}/`, cookie: 'session=0' }) });
+  const id = (await created.json()).site.id;
+  await waitFor(async () => (await (await api(base, `/api/sites/${id}`)).json()).site.last.status === 'valid');
+  const results = await Promise.all([1, 2].map(async () => (await api(base, `/api/sites/${id}/fetch`)).json()));
+  assert.deepEqual(results.map((r) => r.status), [200, 200]);
+  assert.equal((await (await api(base, `/api/sites/${id}?reveal=1`)).json()).site.cookie, `session=${generation}`);
+});
+
+test('A new cookie survives failure of a later redirect hop', async (t) => {
+  const port = await listen(t, http.createServer((req, res) => {
+    if (req.url === '/renew') {
+      res.writeHead(302, { location: '/broken', 'set-cookie': 'session=renewed; Path=/' });
+      res.end();
+    } else if (req.url === '/broken') req.socket.destroy();
+    else res.end('signed in');
+  }));
+  const { base } = await startService(t, 'resident');
+  const created = await api(base, '/api/sites', { method: 'POST', body: JSON.stringify({ url: `http://127.0.0.1:${port}/`, cookie: 'session=old' }) });
+  const id = (await created.json()).site.id;
+  await waitFor(async () => (await (await api(base, `/api/sites/${id}`)).json()).site.last.status === 'valid');
+  assert.equal((await api(base, `/api/sites/${id}/fetch?path=/renew`)).status, 502);
+  assert.equal((await (await api(base, `/api/sites/${id}?reveal=1`)).json()).site.cookie, 'session=renewed');
+});
+
+test('An in-flight request cannot overwrite cookies manually replaced in the extension', async (t) => {
+  let release;
+  const started = new Promise((resolve) => { release = resolve; });
+  let finish;
+  const gate = new Promise((resolve) => { finish = resolve; });
+  t.after(finish);
+  const port = await listen(t, http.createServer(async (req, res) => {
+    if (req.url === '/slow') {
+      release(); await gate;
+      res.setHeader('set-cookie', 'session=stale-rotation; Path=/');
+    }
+    res.end('signed in');
+  }));
+  const { base } = await startService(t, 'resident');
+  const created = await api(base, '/api/sites', { method: 'POST', body: JSON.stringify({ url: `http://127.0.0.1:${port}/`, cookie: 'session=old' }) });
+  const id = (await created.json()).site.id;
+  await waitFor(async () => (await (await api(base, `/api/sites/${id}`)).json()).site.last.status === 'valid');
+  const fetching = api(base, `/api/sites/${id}/fetch?path=/slow`);
+  await started;
+  assert.equal((await api(base, `/api/sites/${id}`, { method: 'PATCH', body: JSON.stringify({ cookie: 'session=manual-new' }) })).status, 200);
+  finish(); await fetching;
+  assert.equal((await (await api(base, `/api/sites/${id}?reveal=1`)).json()).site.cookie, 'session=manual-new');
+});
+
 test('Resident expires tokens and resets their age when a token is regenerated', async (t) => {
   const old = await startService(t, 'resident', { TOKEN_MAX_AGE_DAYS: '1' }, async (dir) => {
     await fs.writeFile(path.join(dir, 'data/token.meta.json'), JSON.stringify({ createdAt: Date.now() - 2 * 86400000 }));
@@ -191,8 +253,9 @@ test('Space remains public when no access token is configured', async (t) => {
   assert.equal((await fetch(base + '/api/list')).status, 200);
 });
 
-test('Resident sends SMTP alerts, throttles repeats and alerts again after recovery', async (t) => {
+test('Resident sends SMTP alerts, retries failures, throttles repeats and alerts again after recovery', async (t) => {
   const messages = [];
+  let rejectNext = false;
   const smtp = net.createServer((socket) => {
     socket.write('220 test SMTP\r\n');
     let buffer = '', state = 'command', data = [];
@@ -208,7 +271,10 @@ test('Resident sends SMTP alerts, throttles repeats and alerts again after recov
         else if (state === 'password') { state = 'command'; socket.write('235 authenticated\r\n'); }
         else if (line.startsWith('EHLO')) socket.write('250-test\r\n250 AUTH LOGIN\r\n');
         else if (line === 'AUTH LOGIN') { state = 'user'; socket.write('334 username\r\n'); }
-        else if (line === 'DATA') { state = 'data'; socket.write('354 send data\r\n'); }
+        else if (line === 'DATA') {
+          if (rejectNext) { rejectNext = false; socket.write('451 temporarily unavailable\r\n'); }
+          else { state = 'data'; socket.write('354 send data\r\n'); }
+        }
         else if (line === 'QUIT') socket.end('221 goodbye\r\n');
         else socket.write('250 ok\r\n');
       }
@@ -217,7 +283,7 @@ test('Resident sends SMTP alerts, throttles repeats and alerts again after recov
   const smtpPort = await listen(t, smtp);
   let upstreamStatus = 401;
   const port = await listen(t, http.createServer((req, res) => { res.writeHead(upstreamStatus); res.end('test'); }));
-  const { base } = await startService(t, 'resident', {}, async (dir) => {
+  const { base, output } = await startService(t, 'resident', {}, async (dir) => {
     await fs.writeFile(path.join(dir, 'data/mail.json'), JSON.stringify({ enabled: true, host: 'smtp.example.test', port: smtpPort, user: 'sender@example.test', pass: 'test-password', from: 'sender@example.test', to: 'receiver@example.test', minIntervalHours: 6 }));
     // Only the TLS transport is replaced; the SMTP protocol and alert logic run normally.
     const preload = path.join(dir, 'smtp-preload.cjs');
@@ -237,4 +303,12 @@ test('Resident sends SMTP alerts, throttles repeats and alerts again after recov
   await api(base, `/api/sites/${id}/check`, { method: 'POST' });
   await waitFor(() => messages.length === 3);
   assert.match(messages[2], /Content-Transfer-Encoding: base64/);
+  upstreamStatus = 200;
+  await api(base, `/api/sites/${id}/check`, { method: 'POST' });
+  upstreamStatus = 401;
+  rejectNext = true;
+  await api(base, `/api/sites/${id}/check`, { method: 'POST' });
+  await waitFor(() => output().includes('告警邮件发送失败'));
+  await api(base, `/api/sites/${id}/check`, { method: 'POST' });
+  await waitFor(() => messages.length === 4);
 });

@@ -25,10 +25,11 @@ function normalizeBase(raw) {
   if (u.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)) {
     throw new Error('远程服务请使用 HTTPS');
   }
-  if (u.pathname.replace(/\/+$/, '') !== '/resident') {
-    throw new Error('服务地址应以 /resident 结尾');
+  const prefix = u.pathname.replace(/\/+$/, '');
+  if (prefix !== '' && prefix !== '/resident') {
+    throw new Error('服务地址应为服务根地址，或以 /resident 结尾');
   }
-  return u.origin + '/resident';
+  return u.origin + prefix;
 }
 
 const STATUS = {
@@ -94,12 +95,13 @@ async function loadSettings() {
 
 async function findTokenFromTabs() {
   const expected = new URL(state.base);
+  const prefix = expected.pathname.replace(/\/+$/, '');
   const tabs = await chrome.tabs.query({});
   for (const t of tabs) {
     if (!t.url) continue;
     let u;
     try { u = new URL(t.url); } catch { continue; }
-    if (u.origin !== expected.origin || !/^\/resident(?:\/|$)/.test(u.pathname)) continue;
+    if (u.origin !== expected.origin || ![prefix, prefix + '/', prefix + '/index.html'].includes(u.pathname)) continue;
     try {
       const [res] = await chrome.scripting.executeScript({
         target: { tabId: t.id },

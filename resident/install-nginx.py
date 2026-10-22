@@ -25,6 +25,7 @@ BLOCK = (
     "\t\tproxy_pass http://127.0.0.1:8901/;\n"
     "\t\tproxy_http_version 1.1;\n"
     "\t\tproxy_set_header Host $host;\n"
+    "\t\tproxy_set_header X-Forwarded-Proto $scheme;\n"
     "\t\tproxy_set_header X-Real-IP $remote_addr;\n"
     "\t\tproxy_read_timeout 120s;\n"
     "\t\tclient_body_timeout 120s;\n"

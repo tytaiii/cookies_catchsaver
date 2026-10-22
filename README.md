@@ -22,7 +22,7 @@ Resident holds the website session on the always-on host. Agents call `/api/site
 
 ## Session renewal and alerts (1.3.0)
 
-Resident saves session cookies returned in `Set-Cookie`, including during redirects, so rotated credentials can be reused by the next request. The extension also sends the current browser's User-Agent and basic `sec-ch-ua` hints when writing cookies. These help reproduce HTTP requests, but cannot reproduce a browser's TLS fingerprint or bypass a site's authentication rules.
+Resident saves session cookies returned in `Set-Cookie`, including during redirects, so rotated credentials can be reused by the next request. Requests to the same configured site run sequentially to protect rotating sessions; different sites can run in parallel. Cookie renewal is saved before reading the remaining response, and an old response cannot replace credentials that you manually updated in the meantime. The extension also sends the current browser's User-Agent and basic `sec-ch-ua` hints when writing cookies. These help reproduce HTTP requests, but cannot reproduce a browser's TLS fingerprint or bypass a site's authentication rules.
 
 Optional email alerts report expired sessions or invalid URLs. Resident also supports authentication failure limits, optional access-token expiration, and binding browser API access to the first authenticated extension. Space adds optional token protection for its listing, downloads, and deletion endpoints.
 
@@ -97,13 +97,13 @@ curl -X POST -H "X-Token: $(cat ~/resident/data/token.txt)" \
   http://127.0.0.1:8901/api/mail/test
 ```
 
-The same expired/invalid state is rate limited to one alert per `minIntervalHours` (default 6). A successful session check resets the alert state. After the first authenticated extension request, its ID is saved in `resident/data/extensions.json`. To replace that extension, stop Resident, remove this file, restart Resident, and connect with the intended extension.
+Successful alerts for the same expired/invalid state are rate limited to one per `minIntervalHours` (default 6); a failed delivery can be retried by the next session check. A successful session check resets the alert state. After the first authenticated extension request, its ID is saved in `resident/data/extensions.json`. To replace that extension, stop Resident, remove this file, restart Resident, and connect with the intended extension.
 
 ## Chromium extension
 
 Open the extensions page in Chrome, Edge, or Brave, enable developer mode, and load `resident/extension/` as an unpacked extension. Optional Windows, macOS, and Linux helper scripts copy the extension to a stable location and open the extensions page; you still load it manually.
 
-On first use, enter **your own** service URL, such as `https://your-domain.example/resident`, in the extension's service settings. Either paste the token manually or sign in to the Resident web page in the same browser and click **Auto connect**. Auto connect only reads a `/resident/` page on the configured origin. Remote service URLs must use HTTPS; HTTP is accepted for local `localhost` and `127.0.0.1` instances.
+On first use, enter **your own** service URL, such as `https://your-domain.example/resident`, in the extension's service settings. Either paste the token manually or sign in to the Resident web page in the same browser and click **Auto connect**. Auto connect only reads the configured service page on the configured origin. For a local service without nginx, use `http://127.0.0.1:8901` as the service URL and sign in at its root page. Remote service URLs must use HTTPS; HTTP is accepted for local `localhost` and `127.0.0.1` instances.
 
 After signing in to a target website, open the extension, select or create a Resident site, and choose **Write and check**. You can also copy the cookie header without uploading it. See the [English extension guide](resident/extension/README.en.md) for permissions and details.
 
@@ -138,9 +138,13 @@ curl -H "X-Token: $TOKEN" https://your-domain.example/resident/api/sites
 - Resident is an HTTP client, not a full browser. Sites that require JavaScript challenges, dynamic tokens, or IP-bound sessions may not work.
 - Cookies are stored as a Cookie header per configured site, not a complete browser cookie jar. Path-specific and same-name cookies on different paths are not tracked separately. Session renewal does not override absolute expiry or browser-specific security checks.
 
+## Upgrading to 1.3.1
+
+Replace the code while keeping `resident/data/` and your Space files. Restart the services and reload the unpacked extension from its extensions page. For existing HTTPS nginx deployments, add `proxy_set_header X-Forwarded-Proto $scheme;` to the Space location, then validate and reload nginx so Space can set Secure cookies. The example config and newly generated locations include this header; installers leave existing locations unchanged. If TLS terminates at a trusted gateway before nginx, pass that gateway's original protocol instead.
+
 ## Verification
 
-Run the local integration checks with `node --test tests/services.test.js` (Node.js 22+). They use temporary data and local HTTP/SMTP fixtures; no real website sessions or SMTP account are required.
+Run the local integration checks with `node --test` (Node.js 22+). They use temporary data and local HTTP/SMTP fixtures; no real website sessions or SMTP account are required.
 
 ## Backup and license
 

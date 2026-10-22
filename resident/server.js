@@ -32,7 +32,7 @@ const PUBLIC_DIR = path.join(ROOT, 'public');
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 8901);
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 
 // 管理界面现在在浏览器扩展里。把 SERVE_WEB 设成 0 可以让服务端只提供接口，
 // 不再对外给出 /resident/ 这个页面（纯接口模式，更轻）。
@@ -453,6 +453,7 @@ async function requestFollow(startUrl, opts) {
       // 同一条重定向链也要使用刚轮换的会话，而不是继续发送旧 Cookie。
       const merged = mergeSetCookies(currentCookie, received, url);
       if (merged != null) currentCookie = merged;
+      if (received.length && opts.onCookies) await opts.onCookies(received, url);
     }
 
     if ([301, 302, 303, 307, 308].includes(res.status)) {
@@ -483,6 +484,45 @@ async function requestFollow(startUrl, opts) {
     };
   }
   throw new Error('重定向次数过多');
+}
+
+// 同一站点的请求依次使用最新会话；不同站点仍可并行。
+const siteRequests = new Map();
+
+function requestSite(site, targetForSite, options) {
+  const previous = siteRequests.get(site.id) || Promise.resolve();
+  const pending = previous.then(async () => {
+    const expected = { url: site.url, cookie: site.cookie, headers: site.headers, ua: site.ua, hints: site.hints };
+    const stillCurrent = () => findSite(site.id) === site &&
+      Object.entries(expected).every(([key, value]) => site[key] === value);
+    const target = targetForSite();
+    let cookie = '';
+    try { cookie = unseal(site.cookie); } catch { /* 无 Cookie 的 Token 站点也允许请求 */ }
+    const response = await requestFollow(target, {
+      ...options,
+      cookie,
+      ua: site.ua,
+      hints: siteHints(site),
+      extraHeaders: siteHeaders(site),
+      async onCookies(received, url) {
+        // 用户在请求期间重新采集凭据时，旧响应不能覆盖新凭据。
+        if (!stillCurrent()) return;
+        const merged = mergeSetCookies(cookie, received, url);
+        if (merged == null) return;
+        cookie = merged;
+        expected.cookie = site.cookie = seal(merged);
+        // 收到响应头即保存，即使后续跳转或响应体读取失败，也保留续期结果。
+        await save();
+      },
+    });
+    return { ...response, requested: target, stale: !stillCurrent() };
+  });
+  const tail = pending.catch(() => {});
+  siteRequests.set(site.id, tail);
+  tail.then(() => {
+    if (siteRequests.get(site.id) === tail) siteRequests.delete(site.id);
+  });
+  return pending;
 }
 
 function looksLikeLoginPage(html) {
@@ -619,7 +659,9 @@ function sendAlertMail(site, status, reason) {
   return smtpSend(MAIL, subject, text);
 }
 
-/** 状态进入失效时发信；恢复后重置，避免反复打扰。 */
+const pendingAlerts = new Set();
+
+/** 状态进入失效时发信；仅成功投递后开始限频，失败可在下一次检测时重试。 */
 function maybeAlert(site, status, reason) {
   const bad = status === 'expired' || status === 'invalid';
   const prev = site.alert || {};
@@ -632,11 +674,19 @@ function maybeAlert(site, status, reason) {
 
   const minMs = (Number(MAIL.minIntervalHours) || 6) * 3600000;
   if (prev.status === status && Date.now() - Number(prev.at || 0) < minMs) return;
+  if (pendingAlerts.has(site.id)) return;
 
-  site.alert = { status, at: Date.now() };
+  pendingAlerts.add(site.id);
   sendAlertMail(site, status, reason)
-    .then(() => log(`已发送告警邮件：${site.name} / ${status}`))
-    .catch((e) => log('告警邮件发送失败：', site.name, e.message));
+    .then(async () => {
+      if (site.last?.status === status && findSite(site.id) === site) {
+        site.alert = { status, at: Date.now() };
+        await save();
+      }
+      log(`已发送告警邮件：${site.name} / ${status}`);
+    })
+    .catch((e) => log('告警邮件发送失败：', site.name, e.message))
+    .finally(() => pendingAlerts.delete(site.id));
 }
 
 // ---------------------------------------------------------------- Cookie 合并
@@ -739,27 +789,10 @@ async function checkSite(site, { force = false } = {}) {
   const prev = site.last || {};
   site.last = { ...prev, status: 'checking', at: prev.at || null };
   try {
-    let cookie = '';
-    try {
-      cookie = unseal(site.cookie);
-    } catch (e) {
-      log('解不开 cookie：', site.name, e.message);
-    }
-
-    const r = await requestFollow(site.url, {
-      cookie,
-      ua: site.ua,
-      hints: siteHints(site),
-      extraHeaders: siteHeaders(site),
+    const r = await requestSite(site, () => site.url, {
       cap: CHECK_BODY_CAP,
     });
-
-    // 服务端可能在响应里下发新 cookie（轮换、续期都会这样做），这里合并回存储
-    const mergedCheck = mergeSetCookies(cookie, r.setCookies, site.url);
-    if (mergedCheck != null) {
-      site.cookie = seal(mergedCheck);
-      log('cookie 已更新：', site.name);
-    }
+    if (r.stale) return site.last;
 
     const httpStatus = r.res.status;
     const html = r.buf ? r.buf.toString('utf8') : '';
@@ -1452,7 +1485,9 @@ async function handle(req, res) {
       if (v.enabled !== undefined) site.enabled = v.enabled;
       if (v.url !== undefined) site.last = { status: 'unknown' };
       await save();
-      if (v.url !== undefined || v.cookie !== undefined) checkSite(site).catch(() => {});
+      if (['url', 'cookie', 'headers', 'ua', 'hints'].some((key) => v[key] !== undefined)) {
+        checkSite(site, { force: true }).catch(() => {});
+      }
       return send(res, 200, { site: publicView(site) });
     }
 
@@ -1487,32 +1522,20 @@ async function handle(req, res) {
       cap = Math.max(1024, Math.min(FETCH_MAX_CAP, cap));
 
       const target = resolveTarget(site, p);
-      let cookie = '';
-      try { cookie = unseal(site.cookie); } catch { /* 空 cookie 也允许 */ }
 
       try {
-        const r = await requestFollow(target, {
-          cookie,
-          ua: site.ua,
-          hints: siteHints(site),
-          extraHeaders: siteHeaders(site),
+        const r = await requestSite(site, () => resolveTarget(site, p), {
           method: m2,
           body,
           contentType,
           cap,
         });
 
-        const mergedFetch = mergeSetCookies(cookie, r.setCookies, target);
-        if (mergedFetch != null) {
-          site.cookie = seal(mergedFetch);
-          await save();
-          log('cookie 已更新（fetch）：', site.name);
-        }
         const ct = String(r.res.headers.get('content-type') || '');
         const isText = /^(text\/|application\/(json|xml|javascript|x-www-form-urlencoded))/i.test(ct) || ct === '';
         const payload = {
           url: r.finalUrl,
-          requested: target,
+          requested: r.requested,
           status: r.res.status,
           contentType: ct,
           size: r.buf ? r.buf.length : 0,

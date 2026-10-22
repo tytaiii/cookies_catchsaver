@@ -28,10 +28,11 @@ function normalizeBase(raw) {
   if (u.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(u.hostname)) {
     throw new Error('远程服务请使用 HTTPS');
   }
-  if (u.pathname.replace(/\/+$/, '') !== '/resident') {
-    throw new Error('服务地址应以 /resident 结尾');
+  const prefix = u.pathname.replace(/\/+$/, '');
+  if (prefix !== '' && prefix !== '/resident') {
+    throw new Error('服务地址应为服务根地址，或以 /resident 结尾');
   }
-  return u.origin + '/resident';
+  return u.origin + prefix;
 }
 
 /* ---------------- 基础 ---------------- */
@@ -48,11 +49,8 @@ function setBusy(busy) {
   $('save').disabled = busy;
 }
 
-function sameSiteHost(a, b) {
-  if (!a || !b) return false;
-  const x = a.replace(/^www\./i, '').toLowerCase();
-  const y = b.replace(/^www\./i, '').toLowerCase();
-  return x === y || x.endsWith('.' + y) || y.endsWith('.' + x);
+function sameSiteOrigin(a, b) {
+  try { return new URL(a).origin === new URL(b).origin; } catch { return false; }
 }
 
 async function api(path, options = {}) {
@@ -112,6 +110,10 @@ async function loadSites() {
     st.textContent = '服务里还没有任何常驻站，先去页面添加一个';
     return;
   }
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = '— 请选择常驻站 —';
+  sel.appendChild(placeholder);
   for (const s of state.sites) {
     const opt = document.createElement('option');
     opt.value = s.id;
@@ -123,7 +125,7 @@ async function loadSites() {
   }
   // 自动选中域名匹配的那条
   const match = state.sites.find((s) => {
-    try { return sameSiteHost(new URL(s.url).hostname, state.host); } catch { return false; }
+    return sameSiteOrigin(s.url, state.tabUrl);
   });
   if (match) {
     sel.value = match.id;
@@ -248,12 +250,13 @@ async function copyOnly() {
  */
 async function findTokenFromTabs() {
   const expected = new URL(state.base);
+  const prefix = expected.pathname.replace(/\/+$/, '');
   const tabs = await chrome.tabs.query({});
   for (const t of tabs) {
     if (!t.url) continue;
     let u;
     try { u = new URL(t.url); } catch { continue; }
-    if (u.origin !== expected.origin || !/^\/resident(?:\/|$)/.test(u.pathname)) continue;
+    if (u.origin !== expected.origin || ![prefix, prefix + '/', prefix + '/index.html'].includes(u.pathname)) continue;
     try {
       const [res] = await chrome.scripting.executeScript({
         target: { tabId: t.id },
